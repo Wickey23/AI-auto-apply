@@ -7,6 +7,7 @@ export const USER_COOKIE = "applypilot_uid";
 export const ADMIN_SESSION_COOKIE = "applypilot_admin_session";
 
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
+const EXTENSION_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 180;
 
 function getSecret() {
     return process.env.AUTH_SECRET || "dev-auth-secret-change-me";
@@ -71,6 +72,32 @@ export function verifyAdminSessionToken(token?: string | null) {
     if (!Number.isFinite(ts)) return false;
     const age = Math.floor(Date.now() / 1000) - ts;
     return age >= 0 && age <= SESSION_TTL_SECONDS;
+}
+
+export function createExtensionUserToken(userId: string) {
+    const ts = Math.floor(Date.now() / 1000);
+    const payload = `ext.${userId}.${ts}`;
+    const sig = crypto.createHmac("sha256", getSecret()).update(payload).digest("hex");
+    return `${payload}.${sig}`;
+}
+
+export function verifyExtensionUserToken(token?: string | null) {
+    if (!token) return null;
+    const [prefix, userId, tsRaw, sig] = token.split(".");
+    if (prefix !== "ext" || !userId || !tsRaw || !sig) return null;
+
+    const payload = `${prefix}.${userId}.${tsRaw}`;
+    const expected = crypto.createHmac("sha256", getSecret()).update(payload).digest("hex");
+    const a = Buffer.from(sig, "hex");
+    const b = Buffer.from(expected, "hex");
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+
+    const ts = Number(tsRaw);
+    if (!Number.isFinite(ts)) return null;
+    const age = Math.floor(Date.now() / 1000) - ts;
+    if (age < 0 || age > EXTENSION_TOKEN_TTL_SECONDS) return null;
+
+    return userId;
 }
 
 export async function getSessionUserId() {

@@ -40,7 +40,7 @@ export function AccountActions() {
                 type="button"
                 onClick={logout}
                 disabled={busy}
-                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+                className="w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm text-white hover:bg-white/15 disabled:opacity-50"
             >
                 Log out
             </button>
@@ -48,11 +48,10 @@ export function AccountActions() {
                 type="button"
                 onClick={clearData}
                 disabled={busy}
-                className="w-full rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 hover:bg-red-100 disabled:opacity-50"
+                className="w-full rounded-md border border-red-300/50 bg-red-500/15 px-3 py-2 text-sm text-red-200 hover:bg-red-500/20 disabled:opacity-50"
             >
                 Clear My Data
             </button>
         </div>
     );
 }
-

@@ -37,6 +37,7 @@ export function AdminDashboardClient({
     logs: AdminLog[];
 }) {
     const [query, setQuery] = useState("");
+    const [logQuery, setLogQuery] = useState("");
     const [sortBy, setSortBy] = useState<"apps" | "newest" | "name">("apps");
     const [pending, startTransition] = useTransition();
     const router = useRouter();
@@ -71,6 +72,60 @@ export function AdminDashboardClient({
         }
         return copy;
     }, [users, query, sortBy]);
+
+    const filteredLogs = useMemo(() => {
+        const q = logQuery.trim().toLowerCase();
+        if (!q) return logs;
+        return logs.filter((log) =>
+            `${log.action} ${log.details} ${log.userId}`.toLowerCase().includes(q)
+        );
+    }, [logs, logQuery]);
+
+    const exportUsersCsv = () => {
+        const header = [
+            "id",
+            "name",
+            "email",
+            "createdAt",
+            "lastActiveAt",
+            "resumes",
+            "jobs",
+            "applications",
+            "contacts",
+            "linkedinProfiles",
+        ];
+        const rows = filteredUsers.map((u) => [
+            u.id,
+            u.name || "",
+            u.email || "",
+            String(u.createdAt || ""),
+            String(u.lastActiveAt || ""),
+            String(u.stats.resumes || 0),
+            String(u.stats.jobs || 0),
+            String(u.stats.applications || 0),
+            String(u.stats.contacts || 0),
+            String(u.stats.linkedinProfiles || 0),
+        ]);
+        const csv = [header, ...rows]
+            .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+            .join("\n");
+        downloadCsv("admin-users.csv", csv);
+    };
+
+    const exportLogsCsv = () => {
+        const header = ["id", "timestamp", "userId", "action", "details"];
+        const rows = filteredLogs.map((log) => [
+            log.id,
+            String(log.timestamp || ""),
+            log.userId,
+            log.action,
+            log.details,
+        ]);
+        const csv = [header, ...rows]
+            .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+            .join("\n");
+        downloadCsv("admin-audit-logs.csv", csv);
+    };
 
     const runAction = (fn: () => Promise<void>) => {
         startTransition(async () => {
@@ -120,6 +175,15 @@ export function AdminDashboardClient({
                         <option value="newest">Sort: Newest users</option>
                         <option value="name">Sort: Name</option>
                     </select>
+                </div>
+                <div className="mt-3">
+                    <button
+                        type="button"
+                        onClick={exportUsersCsv}
+                        className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                        Export Users CSV
+                    </button>
                 </div>
             </div>
 
@@ -189,10 +253,27 @@ export function AdminDashboardClient({
             </div>
 
             <div className="rounded-2xl border bg-white p-4 shadow-sm">
-                <h3 className="font-semibold text-slate-900">Recent Activity</h3>
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <h3 className="font-semibold text-slate-900">Recent Activity</h3>
+                    <div className="flex gap-2">
+                        <input
+                            value={logQuery}
+                            onChange={(e) => setLogQuery(e.target.value)}
+                            placeholder="Filter logs by action/user/details"
+                            className="w-72 rounded-md border border-slate-300 px-3 py-1.5 text-xs"
+                        />
+                        <button
+                            type="button"
+                            onClick={exportLogsCsv}
+                            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                        >
+                            Export Logs CSV
+                        </button>
+                    </div>
+                </div>
                 <div className="mt-3 space-y-2 max-h-72 overflow-auto pr-1">
-                    {logs.length === 0 && <p className="text-sm text-slate-500">No audit logs yet.</p>}
-                    {logs.map((log) => (
+                    {filteredLogs.length === 0 && <p className="text-sm text-slate-500">No audit logs match this filter.</p>}
+                    {filteredLogs.map((log) => (
                         <div key={log.id} className="rounded-md border border-slate-200 px-3 py-2">
                             <div className="flex items-start justify-between gap-3">
                                 <p className="text-sm font-medium text-slate-800">{log.action}</p>
@@ -206,6 +287,19 @@ export function AdminDashboardClient({
             </div>
         </div>
     );
+}
+
+function downloadCsv(filename: string, content: string) {
+    const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
 }
 
 function StatCard({ icon, label, value }: { icon: ReactNode; label: string; value: number }) {

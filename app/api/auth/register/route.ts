@@ -1,9 +1,18 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { createSessionToken, hashPassword, normalizeEmail, SESSION_COOKIE, USER_COOKIE } from "@/lib/auth";
+import { checkRateLimit, withIpKey } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
     try {
+        const rateLimitResponse = checkRateLimit(request, {
+            key: withIpKey(request, "auth:register"),
+            limit: 8,
+            windowMs: 10 * 60_000,
+            message: "Too many registration attempts. Try again later.",
+        });
+        if (rateLimitResponse) return rateLimitResponse;
+
         const body = await request.json();
         const name = String(body?.name || "").trim();
         const email = normalizeEmail(String(body?.email || ""));
@@ -46,4 +55,3 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: (error as Error).message || "Registration failed." }, { status: 400 });
     }
 }
-

@@ -15,7 +15,7 @@ const PROTECTED_PREFIXES = [
     "/settings",
 ];
 
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
     const { pathname } = req.nextUrl;
     const hasSession = Boolean(req.cookies.get(SESSION_COOKIE)?.value);
     const hasAdminSession = Boolean(req.cookies.get(ADMIN_SESSION_COOKIE)?.value);

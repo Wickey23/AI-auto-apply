@@ -1,9 +1,18 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { createSessionToken, normalizeEmail, SESSION_COOKIE, USER_COOKIE, verifyPassword } from "@/lib/auth";
+import { checkRateLimit, withIpKey } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
     try {
+        const rateLimitResponse = checkRateLimit(request, {
+            key: withIpKey(request, "auth:login"),
+            limit: 15,
+            windowMs: 60_000,
+            message: "Too many login attempts. Try again shortly.",
+        });
+        if (rateLimitResponse) return rateLimitResponse;
+
         const body = await request.json();
         const email = normalizeEmail(String(body?.email || ""));
         const password = String(body?.password || "");
@@ -37,4 +46,3 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: (error as Error).message || "Login failed." }, { status: 400 });
     }
 }
-

@@ -1,4 +1,5 @@
 import { db } from "./db";
+import { getSessionUserId } from "./auth";
 
 export interface AuditLog {
     id: string;
@@ -9,12 +10,14 @@ export interface AuditLog {
 }
 
 export async function logAction(action: string, details: string, userId: string = "user-1") {
+    const sessionUserId = await getSessionUserId();
+    const effectiveUserId = userId === "user-1" && sessionUserId ? sessionUserId : userId;
     const newLog = {
         id: `log-${Date.now()}`,
         action,
         details,
         timestamp: new Date().toISOString(),
-        userId,
+        userId: effectiveUserId,
     };
     await db.updateData((data) => {
         if (!Array.isArray(data.auditLogs)) data.auditLogs = [];

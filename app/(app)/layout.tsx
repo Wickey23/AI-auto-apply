@@ -15,12 +15,17 @@ export default async function AppLayout({
     }
 
     return (
-        <div className="flex h-screen overflow-hidden bg-slate-50 text-slate-900">
+        <div className="app-shell flex h-screen overflow-hidden text-slate-900">
             <Sidebar />
-            <main className="flex-1 overflow-y-auto p-8 space-y-4">
-                <div className="flex justify-end items-center gap-2">
-                    <QuickCommand />
-                    <LogoutButton />
+            <main className="flex-1 overflow-y-auto p-5 md:p-8 space-y-4">
+                <div className="glass-card sticky top-4 z-20 rounded-xl px-3 py-2 md:px-4 md:py-3 flex justify-between items-center gap-2">
+                    <div>
+                        <p className="text-xs uppercase tracking-[0.18em] text-slate-500 font-semibold">ApplyPilot Workspace</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <QuickCommand />
+                        <LogoutButton />
+                    </div>
                 </div>
                 {children}
             </main>

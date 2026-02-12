@@ -1,6 +1,7 @@
 import { getAuditLogs } from "@/lib/audit";
 import { db } from "@/lib/db";
 import { SettingsForm } from "@/components/SettingsForm";
+import { PasswordChangeCard } from "@/components/PasswordChangeCard";
 import { Shield, Lock, History } from "lucide-react";
 
 export default async function SettingsPage({ searchParams }: { searchParams?: Promise<{ gmail?: string; reason?: string }> }) {
@@ -31,6 +32,7 @@ export default async function SettingsPage({ searchParams }: { searchParams?: Pr
                         gmailStatus={params.gmail}
                         gmailReason={params.reason}
                     />
+                    <PasswordChangeCard />
 
                     <div className="bg-white p-6 rounded-xl border shadow-sm">
                         <h3 className="font-semibold text-lg flex items-center gap-2 mb-4">

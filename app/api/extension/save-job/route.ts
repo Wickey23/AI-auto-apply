@@ -1,7 +1,8 @@
 import { db } from "@/lib/db";
 import { Job, Application } from "@/lib/types";
 import { NextResponse } from "next/server";
-import { checkExtensionApiKey, corsHeaders } from "@/lib/api-security";
+import { checkExtensionApiKey, corsHeaders, getExtensionUserIdOrError } from "@/lib/api-security";
+import { checkRateLimit, withIpKey } from "@/lib/rate-limit";
 
 export async function OPTIONS() {
     return NextResponse.json({}, {
@@ -11,8 +12,24 @@ export async function OPTIONS() {
 
 export async function POST(request: Request) {
     try {
+        const rateLimitResponse = checkRateLimit(request, {
+            key: withIpKey(request, "extension:save-job"),
+            limit: 120,
+            windowMs: 60_000,
+            message: "Rate limit reached. Slow down and try again in a minute.",
+        });
+        if (rateLimitResponse) {
+            rateLimitResponse.headers.set("Access-Control-Allow-Origin", "*");
+            rateLimitResponse.headers.set("Access-Control-Allow-Methods", "POST, OPTIONS");
+            rateLimitResponse.headers.set("Access-Control-Allow-Headers", "Content-Type, X-ApplyPilot-Key, X-ApplyPilot-User-Token");
+            return rateLimitResponse;
+        }
+
         const authError = checkExtensionApiKey(request);
         if (authError) return authError;
+        const userIdOrError = getExtensionUserIdOrError(request);
+        if (userIdOrError instanceof NextResponse) return userIdOrError;
+        const userId = userIdOrError;
 
         const body = await request.json();
         const { company, title, link, description, source } = body;
@@ -29,7 +46,7 @@ export async function POST(request: Request) {
 
         const newJob: Job = {
             id: `job-${Date.now()}`,
-            userId: "user-1", // Default user for local app
+            userId,
             company,
             title,
             link: link || "",
@@ -42,7 +59,7 @@ export async function POST(request: Request) {
 
         const newApplication: Application = {
             id: `app-${Date.now()}`,
-            userId: "user-1",
+            userId,
             jobId: newJob.id,
             job: newJob,
             status: "INTERESTED",
@@ -57,7 +74,7 @@ export async function POST(request: Request) {
             updatedAt: new Date(),
         };
 
-        await db.updateData((data) => {
+        await db.updateDataForUser(userId, (data) => {
             data.jobs.push(newJob);
             data.applications.push(newApplication);
         });

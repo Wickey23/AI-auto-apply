@@ -2,7 +2,7 @@
 
 import { saveSettings } from "@/app/actions";
 import { useState } from "react";
-import { Key, Loader2, Save } from "lucide-react";
+import { Copy, Key, Loader2, Save } from "lucide-react";
 
 interface SettingsFormProps {
     initialOpenAiKey?: string;
@@ -31,6 +31,8 @@ export function SettingsForm({ initialOpenAiKey, initialGeminiKey, initialProvid
     const [preferredLocation, setPreferredLocation] = useState(initialPreferredLocation || "");
 
     const [isSaving, setIsSaving] = useState(false);
+    const [extensionToken, setExtensionToken] = useState("");
+    const [isGeneratingToken, setIsGeneratingToken] = useState(false);
 
     const getEmailProviderConfig = (email: string) => {
         const domain = (email.split("@")[1] || "").toLowerCase();
@@ -70,6 +72,30 @@ export function SettingsForm({ initialOpenAiKey, initialGeminiKey, initialProvid
             preferredLocation
         });
         setIsSaving(false);
+    };
+
+    const generateExtensionToken = async () => {
+        setIsGeneratingToken(true);
+        try {
+            const res = await fetch("/api/extension/token");
+            const json = await res.json();
+            if (!res.ok) throw new Error(json?.error || "Failed to generate token.");
+            setExtensionToken(String(json.token || ""));
+            alert("Extension user token generated.");
+        } catch (error) {
+            alert((error as Error).message || "Failed to generate extension token.");
+        } finally {
+            setIsGeneratingToken(false);
+        }
+    };
+
+    const copyExtensionToken = async () => {
+        if (!extensionToken) {
+            alert("Generate a token first.");
+            return;
+        }
+        await navigator.clipboard.writeText(extensionToken);
+        alert("Extension token copied.");
     };
 
     return (
@@ -234,6 +260,41 @@ export function SettingsForm({ initialOpenAiKey, initialGeminiKey, initialProvid
                                 </a>
                             </div>
                         )}
+                    </div>
+                </div>
+
+                <div className="pt-6 border-t border-slate-100">
+                    <h4 className="font-semibold text-slate-800 mb-4">Extension Connection</h4>
+                    <div className="rounded-md border p-3 bg-slate-50 space-y-3">
+                        <p className="text-xs text-slate-600">
+                            Generate a per-user extension token. Paste this into your extension settings under
+                            <span className="font-medium"> User Token</span>.
+                        </p>
+                        <div className="flex gap-2">
+                            <button
+                                type="button"
+                                onClick={generateExtensionToken}
+                                disabled={isGeneratingToken}
+                                className="px-3 py-2 text-xs font-medium rounded bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50"
+                            >
+                                {isGeneratingToken ? "Generating..." : "Generate User Token"}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={copyExtensionToken}
+                                disabled={!extensionToken}
+                                className="px-3 py-2 text-xs font-medium rounded border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-50 inline-flex items-center gap-1"
+                            >
+                                <Copy size={14} /> Copy
+                            </button>
+                        </div>
+                        <input
+                            type="text"
+                            value={extensionToken}
+                            readOnly
+                            placeholder="Token will appear here"
+                            className="w-full rounded-md border border-slate-300 p-2 text-xs font-mono bg-white"
+                        />
                     </div>
                 </div>
 

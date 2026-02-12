@@ -1,13 +1,34 @@
 import { NextResponse } from "next/server";
 import { ADMIN_SESSION_COOKIE, createAdminSessionToken } from "@/lib/auth";
+import { checkRateLimit, withIpKey } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
     try {
-        const body = await request.json();
-        const username = String(body?.username || "");
-        const password = String(body?.password || "");
+        const rateLimitResponse = checkRateLimit(request, {
+            key: withIpKey(request, "auth:admin-login"),
+            limit: 10,
+            windowMs: 60_000,
+            message: "Too many admin login attempts. Try again in a minute.",
+        });
+        if (rateLimitResponse) return rateLimitResponse;
 
-        if (username !== "admin" || password !== "1234") {
+        const body = await request.json();
+        const username = String(body?.username || "").trim();
+        const password = String(body?.password || "");
+        const configuredAdminUser = process.env.ADMIN_USERNAME;
+        const configuredAdminPass = process.env.ADMIN_PASSWORD;
+
+        if (process.env.NODE_ENV === "production" && (!configuredAdminUser || !configuredAdminPass)) {
+            return NextResponse.json(
+                { error: "Admin credentials are not configured on the server." },
+                { status: 500 }
+            );
+        }
+
+        const expectedUsername = configuredAdminUser || "admin";
+        const expectedPassword = configuredAdminPass || "1234";
+
+        if (username !== expectedUsername || password !== expectedPassword) {
             return NextResponse.json({ error: "Invalid admin credentials." }, { status: 401 });
         }
 
@@ -25,4 +46,3 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: (error as Error).message || "Admin login failed." }, { status: 400 });
     }
 }
-

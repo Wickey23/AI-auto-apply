@@ -294,14 +294,17 @@ async function queuedUpdate<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 export const db = {
-    async getData() {
-        const userId = await getCurrentUserId();
+    async getDataForUser(userId: string) {
         const raw = await readDb();
         return buildScopedData(raw, userId);
     },
 
-    async updateData(updater: (data: DatabaseSchema) => void) {
+    async getData() {
         const userId = await getCurrentUserId();
+        return this.getDataForUser(userId);
+    },
+
+    async updateDataForUser(userId: string, updater: (data: DatabaseSchema) => void) {
         return queuedUpdate(async () => {
             const raw = await readDb();
             const scoped = buildScopedData(raw, userId);
@@ -310,6 +313,11 @@ export const db = {
             await writeDbAtomic(merged);
             return buildScopedData(merged, userId);
         });
+    },
+
+    async updateData(updater: (data: DatabaseSchema) => void) {
+        const userId = await getCurrentUserId();
+        return this.updateDataForUser(userId, updater);
     },
 
     async getApplications() {
@@ -404,6 +412,23 @@ export const db = {
             raw.authUsers = [...(raw.authUsers || []), user];
             await writeDbAtomic(raw);
             return user;
+        });
+    },
+
+    async updateAuthUserPassword(userId: string, passwordHash: string) {
+        return queuedUpdate(async () => {
+            const raw = await readDb();
+            const idx = (raw.authUsers || []).findIndex((u) => u.id === userId);
+            if (idx === -1) {
+                throw new Error("User not found.");
+            }
+            raw.authUsers![idx] = {
+                ...raw.authUsers![idx],
+                passwordHash,
+                updatedAt: new Date(),
+            };
+            await writeDbAtomic(raw);
+            return raw.authUsers![idx];
         });
     },
 

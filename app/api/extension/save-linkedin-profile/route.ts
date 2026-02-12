@@ -2,7 +2,8 @@ import { db } from "@/lib/db";
 import { LinkedInProfileSnapshot } from "@/lib/types";
 import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
-import { checkExtensionApiKey, corsHeaders } from "@/lib/api-security";
+import { checkExtensionApiKey, corsHeaders, getExtensionUserIdOrError } from "@/lib/api-security";
+import { checkRateLimit, withIpKey } from "@/lib/rate-limit";
 
 function normalizeLinkedInText(raw: string) {
     const text = (raw || "")
@@ -132,8 +133,24 @@ export async function OPTIONS() {
 
 export async function POST(request: Request) {
     try {
+        const rateLimitResponse = checkRateLimit(request, {
+            key: withIpKey(request, "extension:save-linkedin"),
+            limit: 60,
+            windowMs: 60_000,
+            message: "Rate limit reached. Slow down and try again in a minute.",
+        });
+        if (rateLimitResponse) {
+            rateLimitResponse.headers.set("Access-Control-Allow-Origin", "*");
+            rateLimitResponse.headers.set("Access-Control-Allow-Methods", "POST, OPTIONS");
+            rateLimitResponse.headers.set("Access-Control-Allow-Headers", "Content-Type, X-ApplyPilot-Key, X-ApplyPilot-User-Token");
+            return rateLimitResponse;
+        }
+
         const authError = checkExtensionApiKey(request);
         if (authError) return authError;
+        const userIdOrError = getExtensionUserIdOrError(request);
+        if (userIdOrError instanceof NextResponse) return userIdOrError;
+        const userId = userIdOrError;
 
         const body = await request.json();
         const { profileUrl, name, headline, location, about, rawText } = body;
@@ -147,7 +164,7 @@ export async function POST(request: Request) {
 
         const snapshot: LinkedInProfileSnapshot = {
             id: `li-${Date.now()}`,
-            userId: "user-1",
+            userId,
             profileUrl,
             name: name || "",
             headline: headline || "",
@@ -177,7 +194,7 @@ export async function POST(request: Request) {
             + "\n" + extractSection(normalizedLinkedIn, "Certifications", ["Experience", "Education", "Skills", "Projects", "Licenses"]);
         const languages = extractSection(normalizedLinkedIn, "Languages", ["Experience", "Education", "Skills", "Projects", "Licenses", "Certifications"]);
 
-        await db.updateData((data) => {
+        await db.updateDataForUser(userId, (data) => {
             if (!data.linkedinProfiles) data.linkedinProfiles = [];
             data.linkedinProfiles.push(snapshot);
 
