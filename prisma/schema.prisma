@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:C:/Users/samee/3D Objects/AI-auto-apply/dev.db"
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  profile       Profile?
+  resumes       Resume[]
+  coverLetters  CoverLetter[]
+  jobs          Job[]
+  applications  Application[]
+}
+
+model Profile {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contactInfo String?
+  education   String?
+  experience  String?
+  skills      String? // Consider JSON string
+  links       String?
+}
+
+model Resume {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  content     String
+  filePath    String?
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  
+  applications Application[]
+}
+
+model CoverLetter {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  content     String
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  
+  applications Application[]
+}
+
+model Job {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company     String
+  title       String
+  location    String?
+  link        String?
+  description String?
+  source      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  application Application?
+}
+
+model Application {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId       String   @unique
+  job         Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  status      String   @default("INTERESTED")
+  
+  resumeId    String?
+  resume      Resume?  @relation(fields: [resumeId], references: [id])
+  
+  coverLetterId String?
+  coverLetter   CoverLetter? @relation(fields: [coverLetterId], references: [id])
+  
+  notes       String?
+  checklist   String?
+  
+  tailoring   TailoringOutput?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model TailoringOutput {
+  id            String      @id @default(cuid())
+  applicationId String      @unique
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  
+  keywords      String?
+  suggestions   String?
+  generatedResume String?
+  generatedCoverLetter String?
+  matchScore    Int?
+  
+  createdAt     DateTime    @default(now())
+}

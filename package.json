@@ -1,0 +1,42 @@
+{
+  "name": "temp_app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@hookform/resolvers": "^5.2.2",
+    "@prisma/client": "^7.4.0",
+    "@types/imap-simple": "^4.2.10",
+    "@types/mailparser": "^3.4.6",
+    "clsx": "^2.1.1",
+    "imap-simple": "^5.1.0",
+    "jspdf": "^4.1.0",
+    "lucide-react": "^0.563.0",
+    "mailparser": "^3.9.3",
+    "next": "16.1.6",
+    "next-auth": "^4.24.13",
+    "openai": "^6.21.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-hook-form": "^7.71.1",
+    "tailwind-merge": "^3.4.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.1.6",
+    "prisma": "^7.4.0",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
