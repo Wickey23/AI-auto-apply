@@ -14,6 +14,7 @@ import {
     BadgeDollarSign,
     Users
 } from "lucide-react";
+import { AccountActions } from "./AccountActions";
 
 const navigation = [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
@@ -69,6 +70,9 @@ export function Sidebar() {
                     <PlusCircle className="h-4 w-4" />
                     New Application
                 </Link>
+                <div className="mt-3">
+                    <AccountActions />
+                </div>
             </div>
         </div>
     );

@@ -10,7 +10,7 @@ export default function Home() {
           ApplyPilot
         </div>
         <div className="flex gap-4">
-          <Link href="/dashboard" className="text-sm font-medium hover:text-blue-600">Login</Link>
+          <Link href="/login" className="text-sm font-medium hover:text-blue-600">Login</Link>
         </div>
       </header>
 
@@ -25,10 +25,10 @@ export default function Home() {
           </p>
           <div className="flex items-center justify-center gap-4 pt-4">
             <Link
-              href="/dashboard"
+              href="/login"
               className="px-8 py-3 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 transition flex items-center gap-2"
             >
-              Go to Dashboard <ArrowRight size={18} />
+              Get Started <ArrowRight size={18} />
             </Link>
             <Link
               href="https://github.com/sameer/apply-pilot"

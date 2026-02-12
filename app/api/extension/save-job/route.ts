@@ -1,19 +1,19 @@
 import { db } from "@/lib/db";
 import { Job, Application } from "@/lib/types";
 import { NextResponse } from "next/server";
+import { checkExtensionApiKey, corsHeaders } from "@/lib/api-security";
 
 export async function OPTIONS() {
     return NextResponse.json({}, {
-        headers: {
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'POST, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type',
-        },
+        headers: corsHeaders(),
     });
 }
 
 export async function POST(request: Request) {
     try {
+        const authError = checkExtensionApiKey(request);
+        if (authError) return authError;
+
         const body = await request.json();
         const { company, title, link, description, source } = body;
 
@@ -22,7 +22,7 @@ export async function POST(request: Request) {
                 { error: "Company and Title are required" },
                 {
                     status: 400,
-                    headers: { 'Access-Control-Allow-Origin': '*' }
+                    headers: corsHeaders(),
                 }
             );
         }
@@ -66,7 +66,7 @@ export async function POST(request: Request) {
             { success: true, jobId: newJob.id },
             {
                 status: 201,
-                headers: { 'Access-Control-Allow-Origin': '*' }
+                headers: corsHeaders(),
             }
         );
 
@@ -76,7 +76,7 @@ export async function POST(request: Request) {
             { error: "Internal Server Error" },
             {
                 status: 500,
-                headers: { 'Access-Control-Allow-Origin': '*' }
+                headers: corsHeaders(),
             }
         );
     }

@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { LinkedInProfileSnapshot } from "@/lib/types";
 import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
+import { checkExtensionApiKey, corsHeaders } from "@/lib/api-security";
 
 function normalizeLinkedInText(raw: string) {
     const text = (raw || "")
@@ -125,23 +126,22 @@ function upsertCustomField(profile: any, label: string, value: string, source: "
 
 export async function OPTIONS() {
     return NextResponse.json({}, {
-        headers: {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
-        },
+        headers: corsHeaders(),
     });
 }
 
 export async function POST(request: Request) {
     try {
+        const authError = checkExtensionApiKey(request);
+        if (authError) return authError;
+
         const body = await request.json();
         const { profileUrl, name, headline, location, about, rawText } = body;
 
         if (!profileUrl) {
             return NextResponse.json(
                 { error: "profileUrl is required" },
-                { status: 400, headers: { "Access-Control-Allow-Origin": "*" } }
+                { status: 400, headers: corsHeaders() }
             );
         }
 
@@ -276,13 +276,13 @@ export async function POST(request: Request) {
                     inferredProjects: inferredProjects.length,
                 },
             },
-            { status: 201, headers: { "Access-Control-Allow-Origin": "*" } }
+            { status: 201, headers: corsHeaders() }
         );
     } catch (error) {
         console.error("Extension LinkedIn API Error:", error);
         return NextResponse.json(
             { error: "Internal Server Error" },
-            { status: 500, headers: { "Access-Control-Allow-Origin": "*" } }
+            { status: 500, headers: corsHeaders() }
         );
     }
 }

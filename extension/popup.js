@@ -2,6 +2,9 @@
 
 document.addEventListener('DOMContentLoaded', async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const cfg = await chrome.storage.sync.get(['appBaseUrl', 'applyPilotApiKey']);
+    const appBaseUrl = (cfg.appBaseUrl || 'http://localhost:3000').replace(/\/+$/, '');
+    const apiKey = cfg.applyPilotApiKey || '';
 
     if (!tab) return;
     let parsedData = null;
@@ -76,13 +79,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         try {
             const endpoint = mode === 'linkedin_profile'
-                ? 'http://localhost:3000/api/extension/save-linkedin-profile'
-                : 'http://localhost:3000/api/extension/save-job';
+                ? `${appBaseUrl}/api/extension/save-linkedin-profile`
+                : `${appBaseUrl}/api/extension/save-job`;
 
             const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    ...(apiKey ? { 'X-ApplyPilot-Key': apiKey } : {})
                 },
                 body: JSON.stringify(payload)
             });

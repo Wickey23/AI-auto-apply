@@ -5,6 +5,8 @@ import { Application, Job, Profile, Resume, CoverLetterTemplate, AnswerBankItem,
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { logAction } from "@/lib/audit";
+import { cookies } from "next/headers";
+import { ADMIN_SESSION_COOKIE, verifyAdminSessionToken } from "@/lib/auth";
 
 export async function createJob(formData: FormData) {
     const company = formData.get("company") as string;
@@ -2406,4 +2408,62 @@ export async function addJobFromSearchAction(jobData: any) {
     revalidatePath("/dashboard");
 
     return newApplication.id;
+}
+
+export async function clearAllMyDataAction() {
+    const scoped = await db.getData();
+    const userId = scoped.user.id;
+
+    await db.updateData((data) => {
+        data.jobs = [];
+        data.applications = [];
+        data.resumes = [];
+        data.coverLetterTemplates = [];
+        data.answerBank = [];
+        data.contacts = [];
+        data.interactions = [];
+        data.linkedinProfiles = [];
+        data.profile = {
+            id: `profile-${userId}`,
+            userId,
+            contactInfo: "",
+            experience: [],
+            education: [],
+            projects: [],
+            skills: [],
+            customFields: [],
+            summary: "",
+        };
+        data.settings = {};
+    });
+
+    revalidatePath("/dashboard");
+    revalidatePath("/jobs");
+    revalidatePath("/applications");
+    revalidatePath("/documents");
+    revalidatePath("/profile");
+    revalidatePath("/settings");
+}
+
+async function requireAdminAccess() {
+    const token = (await cookies()).get(ADMIN_SESSION_COOKIE)?.value || "";
+    if (!verifyAdminSessionToken(token)) {
+        throw new Error("Unauthorized admin action.");
+    }
+}
+
+export async function adminClearUserDataAction(userId: string) {
+    await requireAdminAccess();
+    if (!userId) throw new Error("userId is required.");
+    await db.adminClearUserData(userId);
+    await logAction("ADMIN_CLEAR_USER_DATA", `Admin cleared data for ${userId}`, "admin");
+    revalidatePath("/admin");
+}
+
+export async function adminDeleteUserAction(userId: string) {
+    await requireAdminAccess();
+    if (!userId) throw new Error("userId is required.");
+    await db.adminDeleteUser(userId);
+    await logAction("ADMIN_DELETE_USER", `Admin deleted user ${userId}`, "admin");
+    revalidatePath("/admin");
 }
