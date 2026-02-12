@@ -96,6 +96,10 @@ const initialData: DatabaseSchema = {
 
 let updateQueue: Promise<void> = Promise.resolve();
 
+function cloneData<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value));
+}
+
 function makeEmptyProfile(userId: string): Profile {
     return {
         id: `profile-${userId}`,
@@ -125,7 +129,8 @@ function normalizeRecord<T>(value: unknown): Record<string, T> {
 }
 
 async function writeDbAtomic(data: DatabaseSchema): Promise<void> {
-    const tmpPath = `${DB_PATH}.tmp`;
+    await fs.mkdir(path.dirname(DB_PATH), { recursive: true });
+    const tmpPath = `${DB_PATH}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
     await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), "utf-8");
     await fs.rename(tmpPath, DB_PATH);
 }
@@ -201,7 +206,9 @@ function migrateParsed(parsed: any): DatabaseSchema {
 
     if (migrated) {
         // fire and forget; caller does not need to block read path.
-        void writeDbAtomic(out);
+        void writeDbAtomic(out).catch((error) => {
+            console.error("Background DB migration write failed:", error);
+        });
     }
     return out;
 }
@@ -211,8 +218,9 @@ async function readDb(): Promise<DatabaseSchema> {
         const raw = await fs.readFile(DB_PATH, "utf-8");
         return migrateParsed(JSON.parse(raw));
     } catch {
-        await writeDbAtomic(initialData);
-        return initialData;
+        // Do not write during read path; build-time parallel prerender workers can race.
+        // First real write will create the file.
+        return cloneData(initialData);
     }
 }
 
