@@ -2,8 +2,9 @@
 
 import { Application } from "@/lib/types";
 import { generateTailoringAction, saveTailoring } from "@/app/actions";
+import { AiModeBadge } from "@/components/AiModeBadge";
 import { useState } from "react";
-import { Loader2, FileText, Copy, ArrowRight, Save, AlertCircle } from "lucide-react";
+import { Loader2, FileText, Copy, Save, AlertCircle } from "lucide-react";
 
 interface StepTailorProps {
     application: Application;
@@ -51,6 +52,9 @@ export function StepTailor({ application, onComplete }: StepTailorProps) {
                 <p className="text-sm text-purple-700">
                     Generate optimized keywords, resume bullets, and a cover letter based on the job description.
                 </p>
+                <div className="mt-2">
+                    <AiModeBadge />
+                </div>
             </div>
 
             {error && (

@@ -10,6 +10,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     const appBaseUrlInput = document.getElementById("appBaseUrlInput");
     const apiKeyInput = document.getElementById("apiKeyInput");
     const userTokenInput = document.getElementById("userTokenInput");
+    const autopilotEnabledInput = document.getElementById("autopilotEnabledInput");
+    const autopilotSubmitInput = document.getElementById("autopilotSubmitInput");
 
     const modeHint = document.getElementById("modeHint");
     const companyLabel = document.getElementById("companyLabel");
@@ -20,10 +22,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     const jobForm = document.getElementById("jobForm");
     const status = document.getElementById("status");
 
-    const cfg = await chrome.storage.sync.get(["appBaseUrl", "applyPilotApiKey", "applyPilotUserToken"]);
+    const cfg = await chrome.storage.sync.get(["appBaseUrl", "applyPilotApiKey", "applyPilotUserToken", "autopilotEnabled", "autopilotSubmit"]);
     appBaseUrlInput.value = cfg.appBaseUrl || "http://localhost:3000";
     apiKeyInput.value = cfg.applyPilotApiKey || "";
     userTokenInput.value = cfg.applyPilotUserToken || "";
+    autopilotEnabledInput.checked = Boolean(cfg.autopilotEnabled);
+    autopilotSubmitInput.checked = Boolean(cfg.autopilotSubmit);
 
     settingsToggle.addEventListener("click", () => {
         const isOpen = settingsPanel.style.display === "block";
@@ -37,6 +41,8 @@ document.addEventListener("DOMContentLoaded", async () => {
             appBaseUrl: cleanedUrl || "http://localhost:3000",
             applyPilotApiKey: cleanedKey,
             applyPilotUserToken: (userTokenInput.value || "").trim(),
+            autopilotEnabled: Boolean(autopilotEnabledInput.checked),
+            autopilotSubmit: Boolean(autopilotSubmitInput.checked),
         });
         showStatus("Settings saved.", "success");
     });
@@ -76,7 +82,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         appBaseUrlInput.value = "http://localhost:3000";
         apiKeyInput.value = "";
         userTokenInput.value = "";
-        await chrome.storage.sync.set({ appBaseUrl: "http://localhost:3000", applyPilotApiKey: "", applyPilotUserToken: "" });
+        autopilotEnabledInput.checked = false;
+        autopilotSubmitInput.checked = false;
+        await chrome.storage.sync.set({ appBaseUrl: "http://localhost:3000", applyPilotApiKey: "", applyPilotUserToken: "", autopilotEnabled: false, autopilotSubmit: false });
         showStatus("Settings reset.", "success");
     });
 

@@ -5,6 +5,7 @@ import { updateProfile } from "@/app/actions";
 import { useEffect, useState } from "react";
 import { Save, User, Briefcase, GraduationCap, Code, Loader2, Link as LinkIcon, Plus, Trash2 } from "lucide-react";
 import { SectionEditor } from "./SectionEditor";
+import { pushToast } from "@/lib/client-toast";
 
 export default function ProfileForm({ initialProfile }: { initialProfile: Profile }) {
     const [isSaving, setIsSaving] = useState(false);
@@ -72,7 +73,7 @@ export default function ProfileForm({ initialProfile }: { initialProfile: Profil
         setIsSaving(true);
         await updateProfile(profile); // We send the whole profile object now
         setIsSaving(false);
-        alert("Profile saved!");
+        pushToast("Profile saved.", "success");
     };
 
     return (
@@ -325,3 +326,5 @@ export default function ProfileForm({ initialProfile }: { initialProfile: Profil
         </div>
     );
 }
+
+

@@ -4,6 +4,7 @@ import { uploadResume } from "@/app/actions";
 import { Loader2, Upload } from "lucide-react";
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { pushToast } from "@/lib/client-toast";
 
 export function ProfileAutofillUpload() {
     const [isUploading, setIsUploading] = useState(false);
@@ -17,9 +18,9 @@ export function ProfileAutofillUpload() {
             formData.append("file", file);
             await uploadResume(formData);
             router.refresh();
-            alert("Resume uploaded and profile autofill started.");
+            pushToast("Resume uploaded and profile autofill started.", "success");
         } catch (error) {
-            alert((error as Error).message || "Failed to upload resume.");
+            pushToast((error as Error).message || "Failed to upload resume.", "error");
         } finally {
             setIsUploading(false);
             if (inputRef.current) inputRef.current.value = "";
@@ -51,4 +52,6 @@ export function ProfileAutofillUpload() {
         </div>
     );
 }
+
+
 

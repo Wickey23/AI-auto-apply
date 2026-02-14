@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { Buffer } from "node:buffer";
+import { getSessionUserId } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -8,6 +9,11 @@ export async function GET(
     _request: Request,
     { params }: { params: Promise<{ id: string }> }
 ) {
+    const userId = await getSessionUserId();
+    if (!userId) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const resolved = await params;
     const id = decodeURIComponent(resolved.id || "");
     const data = await db.getData();

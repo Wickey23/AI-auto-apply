@@ -3,11 +3,12 @@
 import { saveSettings } from "@/app/actions";
 import { useState } from "react";
 import { Copy, Key, Loader2, Save } from "lucide-react";
+import { pushToast } from "@/lib/client-toast";
 
 interface SettingsFormProps {
     initialOpenAiKey?: string;
     initialGeminiKey?: string;
-    initialProvider?: "openai" | "gemini" | "groq";
+    initialProvider?: "local" | "openai" | "gemini" | "groq";
     initialImapHost?: string;
     initialImapUser?: string;
     initialImapPassword?: string;
@@ -22,7 +23,7 @@ interface SettingsFormProps {
 export function SettingsForm({ initialOpenAiKey, initialGeminiKey, initialProvider, initialImapHost, initialImapUser, initialImapPassword, initialGroqKey, initialPreferredLocation, initialGmailConnected, initialGmailEmail, gmailStatus, gmailReason }: SettingsFormProps) {
     const [openAiKey, setOpenAiKey] = useState(initialOpenAiKey || "");
     const [geminiKey, setGeminiKey] = useState(initialGeminiKey || "");
-    const [provider, setProvider] = useState<"openai" | "gemini" | "groq">(initialProvider || "groq");
+    const [provider, setProvider] = useState<"local" | "openai" | "gemini" | "groq">(initialProvider || "local");
     const [groqKey, setGroqKey] = useState(initialGroqKey || "");
 
     const [imapHost, setImapHost] = useState(initialImapHost || "imap.gmail.com");
@@ -61,17 +62,23 @@ export function SettingsForm({ initialOpenAiKey, initialGeminiKey, initialProvid
     const handleSave = async (e: React.FormEvent) => {
         e.preventDefault();
         setIsSaving(true);
-        await saveSettings({
-            openaiApiKey: openAiKey,
-            geminiApiKey: geminiKey,
-            groqApiKey: groqKey,
-            aiProvider: provider,
-            imapHost,
-            imapUser,
-            imapPassword,
-            preferredLocation
-        });
-        setIsSaving(false);
+        try {
+            await saveSettings({
+                openaiApiKey: openAiKey,
+                geminiApiKey: geminiKey,
+                groqApiKey: groqKey,
+                aiProvider: provider,
+                imapHost,
+                imapUser,
+                imapPassword,
+                preferredLocation
+            });
+            pushToast("Settings saved.", "success");
+        } catch (error) {
+            pushToast((error as Error).message || "Failed to save settings.", "error");
+        } finally {
+            setIsSaving(false);
+        }
     };
 
     const generateExtensionToken = async () => {
@@ -81,9 +88,9 @@ export function SettingsForm({ initialOpenAiKey, initialGeminiKey, initialProvid
             const json = await res.json();
             if (!res.ok) throw new Error(json?.error || "Failed to generate token.");
             setExtensionToken(String(json.token || ""));
-            alert("Extension user token generated.");
+            pushToast("Extension user token generated.", "success");
         } catch (error) {
-            alert((error as Error).message || "Failed to generate extension token.");
+            pushToast((error as Error).message || "Failed to generate extension token.", "error");
         } finally {
             setIsGeneratingToken(false);
         }
@@ -91,11 +98,11 @@ export function SettingsForm({ initialOpenAiKey, initialGeminiKey, initialProvid
 
     const copyExtensionToken = async () => {
         if (!extensionToken) {
-            alert("Generate a token first.");
+            pushToast("Generate a token first.", "info");
             return;
         }
         await navigator.clipboard.writeText(extensionToken);
-        alert("Extension token copied.");
+        pushToast("Extension token copied.", "success");
     };
 
     return (
@@ -107,7 +114,14 @@ export function SettingsForm({ initialOpenAiKey, initialGeminiKey, initialProvid
             <div className="space-y-6">
                 <div>
                     <label className="block text-sm font-medium text-slate-700 mb-2">Preferred Provider</label>
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-4 gap-4">
+                        <label className={`flex-1 border p-3 rounded-lg cursor-pointer flex items-center gap-2 ${provider === 'local' ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500' : 'hover:bg-slate-50'}`}>
+                            <input type="radio" name="provider" value="local" checked={provider === 'local'} onChange={() => setProvider('local')} className="sr-only" />
+                            <div className="flex-1">
+                                <div className="font-medium text-slate-900">Built-in (No Token)</div>
+                                <div className="text-xs text-slate-500">Recommended default. Free and works without API keys.</div>
+                            </div>
+                        </label>
                         <label className={`flex-1 border p-3 rounded-lg cursor-pointer flex items-center gap-2 ${provider === 'openai' ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500' : 'hover:bg-slate-50'}`}>
                             <input type="radio" name="provider" value="openai" checked={provider === 'openai'} onChange={() => setProvider('openai')} className="sr-only" />
                             <div className="flex-1">
@@ -119,7 +133,7 @@ export function SettingsForm({ initialOpenAiKey, initialGeminiKey, initialProvid
                             <input type="radio" name="provider" value="gemini" checked={provider === 'gemini'} onChange={() => setProvider('gemini')} className="sr-only" />
                             <div className="flex-1">
                                 <div className="font-medium text-slate-900">Google Gemini</div>
-                                <div className="text-xs text-slate-500">Free tier available. Fast & high quality.</div>
+                                <div className="text-xs text-slate-500">Temporarily routed to Built-in mode in this version.</div>
                             </div>
                         </label>
                         <label className={`flex-1 border p-3 rounded-lg cursor-pointer flex items-center gap-2 ${provider === 'groq' ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500' : 'hover:bg-slate-50'}`}>
@@ -160,7 +174,19 @@ export function SettingsForm({ initialOpenAiKey, initialGeminiKey, initialProvid
                     </div>
                 )}
 
-                {/* ... existing AI fields ... */}
+                {provider === 'groq' && (
+                    <div className="animate-in fade-in slide-in-from-top-2 duration-200">
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Groq API Key</label>
+                        <input
+                            type="password"
+                            value={groqKey}
+                            onChange={(e) => setGroqKey(e.target.value)}
+                            placeholder="gsk_..."
+                            className="w-full rounded-md border border-slate-300 p-2 text-sm"
+                        />
+                        <p className="text-xs text-slate-500 mt-1">Optional. If omitted, app falls back to Built-in no-token mode.</p>
+                    </div>
+                )}
 
                 <div className="pt-6 border-t border-slate-100">
                     <h4 className="font-semibold text-slate-800 mb-4">Email Integration (IMAP)</h4>
@@ -327,3 +353,5 @@ export function SettingsForm({ initialOpenAiKey, initialGeminiKey, initialProvid
         </form>
     );
 }
+
+

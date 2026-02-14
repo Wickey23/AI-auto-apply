@@ -4,6 +4,7 @@ import { adminClearUserDataAction, adminDeleteUserAction } from "@/app/actions";
 import { ReactNode, useMemo, useState, useTransition } from "react";
 import { BarChart3, Database, Search, ShieldAlert, Trash2, Users } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { pushToast } from "@/lib/client-toast";
 
 type AdminUserRow = {
     id: string;
@@ -133,7 +134,7 @@ export function AdminDashboardClient({
                 await fn();
                 router.refresh();
             } catch (error) {
-                alert((error as Error).message || "Admin action failed.");
+                pushToast((error as Error).message || "Admin action failed.", "error");
             }
         });
     };
@@ -310,3 +311,4 @@ function StatCard({ icon, label, value }: { icon: ReactNode; label: string; valu
         </div>
     );
 }
+

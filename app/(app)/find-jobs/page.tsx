@@ -2,8 +2,31 @@
 
 import { useEffect, useState } from "react";
 import { generateJobSearchQueriesAction, getJobSearchPersonalizationStatusAction, searchJobsAction } from "@/app/actions";
+import { AiModeBadge } from "@/components/AiModeBadge";
 import { JobSearchResults } from "@/components/JobSearchResults";
-import { Search, Loader2, ExternalLink, Briefcase, Sliders, AlertCircle, Sparkles } from "lucide-react";
+import { Search, Loader2, ExternalLink, Briefcase, Sliders, AlertCircle, Sparkles, Save } from "lucide-react";
+import { pushToast } from "@/lib/client-toast";
+
+type FiltersState = {
+    locations: string[];
+    keywords: string[];
+    usOnly: boolean;
+    remoteOnly: boolean;
+    relocation: "any" | "yes" | "no";
+    level: string;
+    minRelevance: number;
+    postedWithinDays: number;
+};
+
+type SavedStrategyPack = {
+    id: string;
+    createdAt: string;
+    title: string;
+    recommendedTitles: string[];
+    searchKeywords: string[];
+    booleanQueries: Array<{ label: string; query: string }>;
+    filters: FiltersState;
+};
 
 export default function FindJobsPage() {
     const formatQueryForDisplay = (query: string) => {
@@ -43,8 +66,10 @@ export default function FindJobsPage() {
     const [jobsByQuery, setJobsByQuery] = useState<Record<number, any[]>>({});
     const [loadingQuery, setLoadingQuery] = useState<number | null>(null);
     const [selectedLocationOption, setSelectedLocationOption] = useState("United States");
+    const [isSearchingAll, setIsSearchingAll] = useState(false);
+    const [savedPacks, setSavedPacks] = useState<SavedStrategyPack[]>([]);
     const [keywordInput, setKeywordInput] = useState("");
-    const [filters, setFilters] = useState({
+    const [filters, setFilters] = useState<FiltersState>({
         locations: [] as string[],
         keywords: [] as string[],
         usOnly: true,
@@ -70,6 +95,16 @@ export default function FindJobsPage() {
         loadStatus();
     }, []);
 
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem("applypilot_saved_strategy_packs");
+            const parsed = raw ? JSON.parse(raw) : [];
+            if (Array.isArray(parsed)) setSavedPacks(parsed);
+        } catch {
+            setSavedPacks([]);
+        }
+    }, []);
+
     const handleAnalyze = async () => {
         setIsAnalyzing(true);
         setError(null);
@@ -84,7 +119,7 @@ export default function FindJobsPage() {
                     keywords: [],
                     usOnly: data.defaultFilters.usOnly !== false,
                     remoteOnly: Boolean(data.defaultFilters.remoteOnly),
-                    relocation: data.defaultFilters.relocation || "any",
+                    relocation: (["any", "yes", "no"].includes(data.defaultFilters.relocation) ? data.defaultFilters.relocation : "any") as FiltersState["relocation"],
                     level: data.defaultFilters.level || "",
                     minRelevance: Number(data.defaultFilters.minRelevance || 1),
                     postedWithinDays: Number(data.defaultFilters.postedWithinDays || 30),
@@ -118,6 +153,66 @@ export default function FindJobsPage() {
         }
     };
 
+    const handleSearchAllStrategies = async () => {
+        if (!results?.booleanQueries?.length) return;
+        setIsSearchingAll(true);
+        setError(null);
+        try {
+            const primaryLocation = filters.locations[0] || "";
+            const items = await Promise.all(
+                results.booleanQueries.map(async (item: any, index: number) => {
+                    const jobs = await searchJobsAction(item.query, primaryLocation, {
+                        ...filters,
+                        location: primaryLocation,
+                    });
+                    return [index, jobs] as const;
+                })
+            );
+            setJobsByQuery((prev) => {
+                const next = { ...prev };
+                for (const [index, jobs] of items) next[index] = jobs;
+                return next;
+            });
+        } catch (e) {
+            setError((e as Error).message);
+        } finally {
+            setIsSearchingAll(false);
+        }
+    };
+
+    const saveCurrentPack = () => {
+        if (!results?.booleanQueries?.length) {
+            pushToast("Analyze profile first.", "info");
+            return;
+        }
+        const newPack: SavedStrategyPack = {
+            id: `pack-${Date.now()}`,
+            createdAt: new Date().toISOString(),
+            title: `${(results.recommendedTitles || [])[0] || "Job"} strategy pack`,
+            recommendedTitles: results.recommendedTitles || [],
+            searchKeywords: results.searchKeywords || [],
+            booleanQueries: results.booleanQueries || [],
+            filters: { ...filters },
+        };
+        const next = [newPack, ...savedPacks].slice(0, 10);
+        setSavedPacks(next);
+        localStorage.setItem("applypilot_saved_strategy_packs", JSON.stringify(next));
+        pushToast("Strategy pack saved.", "success");
+    };
+
+    const loadSavedPack = (pack: SavedStrategyPack) => {
+        setResults({
+            recommendedTitles: pack.recommendedTitles,
+            searchKeywords: pack.searchKeywords,
+            booleanQueries: pack.booleanQueries,
+            reasoning: "Loaded from saved strategy pack.",
+        });
+        setFilters(pack.filters);
+        setSelectedLocationOption(pack.filters.locations[0] || "United States");
+        setJobsByQuery({});
+        pushToast("Saved strategy loaded.", "success");
+    };
+
     const getSearchLink = (site: string, query: string) => {
         const locationText = filters.locations.length ? filters.locations.join(" OR ") : "";
         const keywordsText = filters.keywords.length ? filters.keywords.join(" ") : "";
@@ -138,6 +233,9 @@ export default function FindJobsPage() {
             <div>
                 <h1 className="text-2xl font-bold tracking-tight">Job Search Assistant</h1>
                 <p className="text-muted-foreground">AI-powered search strategies and real job listings.</p>
+                <div className="mt-2">
+                    <AiModeBadge />
+                </div>
             </div>
 
             <div className="bg-white p-4 rounded-xl border shadow-sm">
@@ -206,6 +304,25 @@ export default function FindJobsPage() {
 
             {results && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                    {savedPacks.length > 0 && (
+                        <div className="bg-white p-4 rounded-xl border shadow-sm">
+                            <h3 className="font-semibold text-slate-900">Saved Strategy Packs</h3>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                                {savedPacks.map((pack) => (
+                                    <button
+                                        key={pack.id}
+                                        type="button"
+                                        onClick={() => loadSavedPack(pack)}
+                                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-left text-xs hover:bg-slate-50"
+                                    >
+                                        <p className="font-medium text-slate-800">{pack.title}</p>
+                                        <p className="text-slate-500">{new Date(pack.createdAt).toLocaleString()}</p>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
                     <div className="bg-white p-6 rounded-xl border shadow-sm">
                         <h3 className="font-semibold text-lg text-slate-900 mb-4">Search Filters</h3>
                         <div className="grid gap-4 md:grid-cols-2">
@@ -245,7 +362,7 @@ export default function FindJobsPage() {
                                                 onClick={() => setFilters((prev) => ({ ...prev, locations: prev.locations.filter((x) => x !== loc) }))}
                                                 className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs text-blue-700"
                                             >
-                                                {loc} ×
+                                                {loc} x
                                             </button>
                                         ))}
                                     </div>
@@ -286,7 +403,7 @@ export default function FindJobsPage() {
                                                 onClick={() => setFilters((prev) => ({ ...prev, keywords: prev.keywords.filter((x) => x !== kw) }))}
                                                 className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs text-emerald-700"
                                             >
-                                                {kw} ×
+                                                {kw} x
                                             </button>
                                         ))}
                                     </div>
@@ -407,7 +524,25 @@ export default function FindJobsPage() {
 
                     {/* Search Queries with Jobs Below Each */}
                     <div className="space-y-6">
-                        <h3 className="font-semibold text-lg text-slate-900">Search Strategies</h3>
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                            <h3 className="font-semibold text-lg text-slate-900">Search Strategies</h3>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={saveCurrentPack}
+                                    className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                                >
+                                    <Save size={12} /> Save Pack
+                                </button>
+                                <button
+                                    onClick={handleSearchAllStrategies}
+                                    disabled={isSearchingAll}
+                                    className="inline-flex items-center gap-1 rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                                >
+                                    {isSearchingAll ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                                    {isSearchingAll ? "Searching all..." : "Find Jobs For All"}
+                                </button>
+                            </div>
+                        </div>
                         {results.booleanQueries.map((item: any, i: number) => (
                             <div key={i} className="space-y-4">
                                 <div className="bg-white p-6 rounded-xl border shadow-sm hover:shadow-md transition">
@@ -491,3 +626,5 @@ export default function FindJobsPage() {
         </div>
     );
 }
+
+

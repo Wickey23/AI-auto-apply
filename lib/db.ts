@@ -21,7 +21,7 @@ type Settings = {
     openaiApiKey?: string;
     geminiApiKey?: string;
     groqApiKey?: string;
-    aiProvider?: "openai" | "gemini" | "groq";
+    aiProvider?: "local" | "openai" | "gemini" | "groq";
     imapHost?: string;
     imapUser?: string;
     imapPassword?: string;
@@ -30,6 +30,18 @@ type Settings = {
     gmailAccessToken?: string;
     gmailAccessTokenExpiresAt?: number;
     gmailEmail?: string;
+    autoApplyEnabled?: boolean;
+    autoApplyAutoSubmit?: boolean;
+    autoApplyQueue?: Array<{
+        id: string;
+        applicationId: string;
+        jobUrl: string;
+        status: "pending" | "running" | "completed" | "failed" | "skipped";
+        attempts: number;
+        lastError?: string;
+        createdAt: string;
+        updatedAt: string;
+    }>;
 };
 
 export type AuthUser = {

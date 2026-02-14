@@ -8,7 +8,7 @@ import { StepResearch } from "./steps/StepResearch";
 import { StepTailor } from "./steps/StepTailor";
 import { StepPrep } from "./steps/StepPrep";
 import { StepApply } from "./steps/StepApply";
-import { CheckCircle, Circle, ArrowRight } from "lucide-react";
+import { CheckCircle } from "lucide-react";
 
 export default function ApplicationView({ application }: { application: Application }) {
     const getInitialStep = (status: ApplicationStatus) => {
@@ -46,12 +46,12 @@ export default function ApplicationView({ application }: { application: Applicat
     };
 
     return (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-8 h-full">
+        <div className="grid h-full grid-cols-1 gap-6 md:grid-cols-4">
             {/* Left Sidebar: Workflow Steps */}
-            <div className="md:col-span-1 space-y-6">
-                <div className="bg-white p-6 rounded-xl border shadow-sm space-y-6">
+            <div className="space-y-6 md:col-span-1">
+                <div className="sticky top-4 space-y-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                     <div>
-                        <h1 className="text-xl font-bold mb-1">{application.job.title}</h1>
+                        <h1 className="mb-1 text-2xl font-semibold tracking-tight text-slate-900">{application.job.title}</h1>
                         <p className="text-muted-foreground text-sm">{application.job.company}</p>
                     </div>
 
@@ -114,7 +114,7 @@ export default function ApplicationView({ application }: { application: Applicat
 
             {/* Main Content Area: Active Step */}
             <div className="md:col-span-3">
-                <div className="bg-white rounded-xl border shadow-sm p-8 min-h-[600px]">
+                <div className="min-h-[620px] rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
                     <CurrentComponent
                         application={application}
                         onComplete={handleNext}

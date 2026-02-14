@@ -3,6 +3,7 @@
 import { clearAllMyDataAction } from "@/app/actions";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { pushToast } from "@/lib/client-toast";
 
 export function AccountActions() {
     const [busy, setBusy] = useState(false);
@@ -25,10 +26,10 @@ export function AccountActions() {
         setBusy(true);
         try {
             await clearAllMyDataAction();
-            alert("All account data has been cleared.");
+            pushToast("All account data has been cleared.", "success");
             router.refresh();
         } catch (error) {
-            alert((error as Error).message || "Failed to clear data.");
+            pushToast((error as Error).message || "Failed to clear data.", "error");
         } finally {
             setBusy(false);
         }
@@ -55,3 +56,5 @@ export function AccountActions() {
         </div>
     );
 }
+
+

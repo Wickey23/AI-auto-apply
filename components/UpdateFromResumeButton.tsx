@@ -4,6 +4,7 @@ import { syncProfileFromLinkedInUrlAndResume } from "@/app/actions";
 import { Loader2, Linkedin } from "lucide-react";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { pushToast } from "@/lib/client-toast";
 
 export function UpdateFromResumeButton({ linkedinUrl }: { linkedinUrl?: string }) {
     const [isUpdating, setIsUpdating] = useState(false);
@@ -24,11 +25,12 @@ export function UpdateFromResumeButton({ linkedinUrl }: { linkedinUrl?: string }
             const result = await syncProfileFromLinkedInUrlAndResume(trimmed);
             router.refresh();
             const warnings = (result.errors || []).length ? `\n\nNotes:\n- ${(result.errors || []).join("\n- ")}` : "";
-            alert(
-                `Profile sync complete. LinkedIn: ${result.linkedinUpdated ? "updated" : "not updated"}, Resume: ${result.resumeUpdated ? "updated" : "not updated"}.${warnings}`
+            pushToast(
+                `Profile sync complete. LinkedIn: ${result.linkedinUpdated ? "updated" : "not updated"}, Resume: ${result.resumeUpdated ? "updated" : "not updated"}.${warnings}`,
+                "success"
             );
         } catch (error) {
-            alert((error as Error).message || "Failed to sync from LinkedIn.");
+            pushToast((error as Error).message || "Failed to sync from LinkedIn.", "error");
         } finally {
             setIsUpdating(false);
         }
@@ -54,3 +56,5 @@ export function UpdateFromResumeButton({ linkedinUrl }: { linkedinUrl?: string }
         </div>
     );
 }
+
+

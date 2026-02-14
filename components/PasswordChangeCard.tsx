@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { KeyRound, Loader2 } from "lucide-react";
+import { pushToast } from "@/lib/client-toast";
 
 export function PasswordChangeCard() {
     const [currentPassword, setCurrentPassword] = useState("");
@@ -12,15 +13,15 @@ export function PasswordChangeCard() {
     const submit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!currentPassword || !newPassword || !confirmPassword) {
-            alert("Complete all password fields.");
+            pushToast("Complete all password fields.", "info");
             return;
         }
         if (newPassword !== confirmPassword) {
-            alert("New password and confirm password must match.");
+            pushToast("New password and confirm password must match.", "info");
             return;
         }
         if (newPassword.length < 8) {
-            alert("New password must be at least 8 characters.");
+            pushToast("New password must be at least 8 characters.", "info");
             return;
         }
 
@@ -36,9 +37,9 @@ export function PasswordChangeCard() {
             setCurrentPassword("");
             setNewPassword("");
             setConfirmPassword("");
-            alert("Password updated successfully.");
+            pushToast("Password updated successfully.", "success");
         } catch (error) {
-            alert((error as Error).message || "Password update failed.");
+            pushToast((error as Error).message || "Password update failed.", "error");
         } finally {
             setSaving(false);
         }
@@ -83,3 +84,5 @@ export function PasswordChangeCard() {
         </div>
     );
 }
+
+

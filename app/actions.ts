@@ -16,9 +16,12 @@ export async function createJob(formData: FormData) {
     const source = formData.get("source") as string;
     const priority = parseInt(formData.get("priority") as string) || 50;
 
+    const scoped = await db.getData();
+    const userId = scoped.user.id;
+
     const newJob: Job = {
         id: `job-${Date.now()}`,
-        userId: "user-1",
+        userId,
         company,
         title,
         link,
@@ -31,7 +34,7 @@ export async function createJob(formData: FormData) {
 
     const newApplication: Application = {
         id: `app-${Date.now()}`,
-        userId: "user-1",
+        userId,
         jobId: newJob.id,
         job: newJob,
         status: "INTERESTED",
@@ -116,9 +119,12 @@ export async function uploadResume(formData: FormData) {
         (!isReadableText && mimeType.includes("pdf")) ? extractPdfTextFallback(bytes) : "";
     const effectiveResumeContent = pdfExtractedText.length > 200 ? pdfExtractedText : resumeContent;
 
+    const scoped = await db.getData();
+    const userId = scoped.user.id;
+
     const newResume: Resume = {
         id: `resume-${Date.now()}`,
-        userId: "user-1",
+        userId,
         name: file.name,
         content: effectiveResumeContent,
         filePath: `/uploads/${file.name}`,
@@ -147,89 +153,32 @@ export async function uploadResume(formData: FormData) {
         const aiCustomFields = await inferCustomProfileFields(effectiveResumeContent);
 
         await db.updateData((data) => {
-            const profile = data.profile;
-
-            // Update contact info
-            if (parsed.contact) {
-                if (parsed.contact.email) profile.contactInfo = parsed.contact.email;
-                if (parsed.contact.location) profile.location = parsed.contact.location;
-                if (parsed.contact.linkedin) profile.linkedin = parsed.contact.linkedin;
-                if (parsed.contact.portfolio) profile.portfolio = parsed.contact.portfolio;
-            }
-
-            // Update summary
-            if (parsed.summary) {
-                profile.summary = parsed.summary;
-            }
-
-            // Add experience
-            if (parsed.experience && parsed.experience.length > 0) {
-                parsed.experience.forEach((exp: any) => {
-                    const newExp: Experience = {
-                        id: `exp-${Date.now()}-${Math.random()}`,
-                        title: exp.title,
-                        company: exp.company,
-                        location: exp.location,
-                        startDate: exp.startDate,
-                        endDate: exp.endDate,
-                        bullets: exp.bullets || [],
-                        skills: []
-                    };
-                    profile.experience.push(newExp);
-                });
-            }
-
-            // Add education
-            if (parsed.education && parsed.education.length > 0) {
-                parsed.education.forEach((edu: any) => {
-                    const newEdu: Education = {
-                        id: `edu-${Date.now()}-${Math.random()}`,
-                        school: edu.school,
-                        degree: edu.degree,
-                        startYear: edu.startYear,
-                        endYear: edu.endYear,
-                        gpa: edu.gpa
-                    };
-                    profile.education.push(newEdu);
-                });
-            }
-
-            // Add skills
-            if (parsed.skills && parsed.skills.length > 0) {
-                parsed.skills.forEach((skill: any) => {
-                    const newSkill: Skill = {
-                        id: `skill-${Date.now()}-${Math.random()}`,
-                        name: skill.name,
-                        category: skill.category as any
-                    };
-                    profile.skills.push(newSkill);
-                });
-            }
-
-            // Add projects
-            if (parsed.projects && parsed.projects.length > 0) {
-                parsed.projects.forEach((proj: any) => {
-                    const newProj: Project = {
-                        id: `proj-${Date.now()}-${Math.random()}`,
-                        name: proj.name,
-                        description: proj.description,
-                        link: proj.link,
-                        bullets: proj.bullets || [],
-                        skills: []
-                    };
-                    profile.projects.push(newProj);
-                });
-            }
-
-            const inferredCustom = inferCustomFieldsFromText(effectiveResumeContent);
-            const combined = [...inferredCustom, ...aiCustomFields];
-            for (const field of combined) {
-                upsertCustomField(profile, field.label, field.value, "Resume");
-            }
+            applyParsedResumeToProfile(data.profile, parsed, effectiveResumeContent, aiCustomFields, "merge");
         });
     } catch (error) {
         console.error("Resume parsing failed:", error);
-        // Continue even if parsing fails
+        // Last-resort local parse: apply any usable signal instead of doing nothing.
+        try {
+            const { parseResumeLocally } = await import("@/lib/resume-parser");
+            const parsedFallback = parseResumeLocally(effectiveResumeContent);
+            const hasFallbackSignal =
+                Boolean(parsedFallback.summary) ||
+                Boolean(parsedFallback.contact?.email) ||
+                Boolean(parsedFallback.contact?.linkedin) ||
+                Boolean(parsedFallback.contact?.portfolio) ||
+                Boolean(parsedFallback.experience?.length) ||
+                Boolean(parsedFallback.education?.length) ||
+                Boolean(parsedFallback.skills?.length) ||
+                Boolean(parsedFallback.projects?.length);
+
+            if (hasFallbackSignal) {
+                await db.updateData((data) => {
+                    applyParsedResumeToProfile(data.profile, parsedFallback, effectiveResumeContent, [], "merge");
+                });
+            }
+        } catch (fallbackError) {
+            console.error("Resume fallback parse failed:", fallbackError);
+        }
     }
 
     revalidatePath("/documents");
@@ -373,6 +322,191 @@ function uniqueStrings(values: string[]) {
     return result;
 }
 
+type ParsedResumeLike = {
+    contact?: {
+        name?: string;
+        email?: string;
+        phone?: string;
+        linkedin?: string;
+        portfolio?: string;
+        location?: string;
+    };
+    summary?: string;
+    experience?: Array<{
+        title?: string;
+        company?: string;
+        location?: string;
+        startDate?: string;
+        endDate?: string;
+        bullets?: string[];
+    }>;
+    education?: Array<{
+        school?: string;
+        degree?: string;
+        startYear?: string;
+        endYear?: string;
+        gpa?: string;
+    }>;
+    skills?: Array<{
+        name?: string;
+        category?: "Technical" | "Soft" | "Language" | "Tool";
+    }>;
+    projects?: Array<{
+        name?: string;
+        description?: string;
+        link?: string;
+        bullets?: string[];
+    }>;
+};
+
+function cleanText(v?: string) {
+    return (v || "").replace(/\s+/g, " ").trim();
+}
+
+function extractEmail(text: string) {
+    return (text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || [""])[0];
+}
+
+function extractPhone(text: string) {
+    return (text.match(/(?:\+?\d[\d()\-\s]{7,}\d)/) || [""])[0];
+}
+
+function mergeContactInfo(existing: string, contact?: ParsedResumeLike["contact"]) {
+    const current = cleanText(existing);
+    const fallbackEmail = extractEmail(current);
+    const fallbackPhone = extractPhone(current);
+    const pieces = uniqueStrings([
+        cleanText(contact?.name),
+        cleanText(contact?.email) || fallbackEmail,
+        cleanText(contact?.phone) || fallbackPhone,
+    ].filter(Boolean));
+    return pieces.join(" | ");
+}
+
+function dedupeByKey<T>(items: T[], keyFn: (x: T) => string) {
+    const seen = new Set<string>();
+    const out: T[] = [];
+    for (const item of items) {
+        const key = keyFn(item);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push(item);
+    }
+    return out;
+}
+
+function normalizeParsedExperience(items: ParsedResumeLike["experience"] = []): Experience[] {
+    const mapped = items
+        .map((exp) => {
+            const title = cleanText(exp?.title);
+            const company = cleanText(exp?.company);
+            const bullets = uniqueStrings((exp?.bullets || []).map((b) => cleanText(b)).filter((b) => b.length > 6)).slice(0, 8);
+            if (!title && !company) return null;
+            return {
+                id: `exp-${Date.now()}-${Math.random()}`,
+                title,
+                company,
+                location: cleanText(exp?.location),
+                startDate: cleanText(exp?.startDate),
+                endDate: cleanText(exp?.endDate),
+                bullets,
+                skills: [],
+            } as Experience;
+        })
+        .filter((x): x is Experience => Boolean(x));
+    return dedupeByKey(mapped, (x) => `${x.title}|${x.company}|${x.startDate}`.toLowerCase());
+}
+
+function normalizeParsedEducation(items: ParsedResumeLike["education"] = []): Education[] {
+    const mapped = items
+        .map((edu) => {
+            const school = cleanText(edu?.school);
+            const degree = cleanText(edu?.degree);
+            if (!school && !degree) return null;
+            return {
+                id: `edu-${Date.now()}-${Math.random()}`,
+                school,
+                degree,
+                startYear: cleanText(edu?.startYear),
+                endYear: cleanText(edu?.endYear),
+                gpa: cleanText(edu?.gpa),
+            } as Education;
+        })
+        .filter((x): x is Education => Boolean(x));
+    return dedupeByKey(mapped, (x) => `${x.school}|${x.degree}|${x.endYear}`.toLowerCase());
+}
+
+function normalizeParsedSkills(items: ParsedResumeLike["skills"] = []): Skill[] {
+    const mapped = items
+        .map((skill) => {
+            const name = cleanText(skill?.name);
+            if (!name) return null;
+            return {
+                id: `skill-${Date.now()}-${Math.random()}`,
+                name,
+                category: (skill?.category || "Technical") as Skill["category"],
+            } as Skill;
+        })
+        .filter((x): x is Skill => Boolean(x));
+    return dedupeByKey(mapped, (x) => x.name.toLowerCase());
+}
+
+function normalizeParsedProjects(items: ParsedResumeLike["projects"] = []): Project[] {
+    const mapped = items
+        .map((proj) => {
+            const name = cleanText(proj?.name);
+            if (!name) return null;
+            return {
+                id: `proj-${Date.now()}-${Math.random()}`,
+                name,
+                description: cleanText(proj?.description),
+                link: cleanText(proj?.link),
+                bullets: uniqueStrings((proj?.bullets || []).map((b) => cleanText(b)).filter((b) => b.length > 6)).slice(0, 8),
+                skills: [],
+            } as Project;
+        })
+        .filter((x): x is Project => Boolean(x));
+    return dedupeByKey(mapped, (x) => `${x.name}|${x.link}`.toLowerCase());
+}
+
+function applyParsedResumeToProfile(
+    profile: Profile,
+    parsed: ParsedResumeLike,
+    resumeContent: string,
+    aiCustomFields: Array<{ label: string; value: string }>,
+    mode: "merge" | "replace"
+) {
+    const contactInfo = mergeContactInfo(profile.contactInfo || "", parsed.contact);
+    if (contactInfo) profile.contactInfo = contactInfo;
+    if (cleanText(parsed.contact?.location)) profile.location = cleanText(parsed.contact?.location);
+    if (cleanText(parsed.contact?.linkedin)) profile.linkedin = cleanText(parsed.contact?.linkedin);
+    if (cleanText(parsed.contact?.portfolio)) profile.portfolio = cleanText(parsed.contact?.portfolio);
+    if (cleanText(parsed.summary).length > 24) profile.summary = cleanText(parsed.summary);
+
+    const parsedExperience = normalizeParsedExperience(parsed.experience || []);
+    const parsedEducation = normalizeParsedEducation(parsed.education || []);
+    const parsedSkills = normalizeParsedSkills(parsed.skills || []);
+    const parsedProjects = normalizeParsedProjects(parsed.projects || []);
+
+    if (mode === "replace") {
+        if (parsedExperience.length) profile.experience = parsedExperience;
+        if (parsedEducation.length) profile.education = parsedEducation;
+        if (parsedSkills.length) profile.skills = parsedSkills;
+        if (parsedProjects.length) profile.projects = parsedProjects;
+    } else {
+        profile.experience = dedupeByKey([...parsedExperience, ...(profile.experience || [])], (x) => `${x.title}|${x.company}|${x.startDate}`.toLowerCase()).slice(0, 25);
+        profile.education = dedupeByKey([...parsedEducation, ...(profile.education || [])], (x) => `${x.school}|${x.degree}|${x.endYear}`.toLowerCase()).slice(0, 12);
+        profile.skills = dedupeByKey([...parsedSkills, ...(profile.skills || [])], (x) => x.name.toLowerCase()).slice(0, 80);
+        profile.projects = dedupeByKey([...parsedProjects, ...(profile.projects || [])], (x) => `${x.name}|${x.link}`.toLowerCase()).slice(0, 20);
+    }
+
+    const inferredCustom = inferCustomFieldsFromText(resumeContent);
+    const combined = [...inferredCustom, ...aiCustomFields];
+    for (const field of combined) {
+        upsertCustomField(profile, field.label, field.value, "Resume");
+    }
+}
+
 function extractLooseSection(text: string, heading: string) {
     const normalized = (text || "").replace(/\r/g, "\n");
     const lines = normalized.split("\n");
@@ -498,8 +632,17 @@ function extractPdfTextFallback(buffer: Buffer) {
         }
     }
 
+    // Fallback: collect long printable spans often present in resume PDFs.
+    const printableRuns = binary.match(/[A-Za-z0-9@._:+\-\/(),\s]{8,}/g) || [];
+    for (const run of printableRuns) {
+        const cleaned = run.replace(/\s+/g, " ").trim();
+        if (cleaned.length >= 20) chunks.push(cleaned);
+    }
+
     return chunks
         .join(" ")
+        .replace(/\([^)]+\)/g, " ")
+        .replace(/\b(\/Type|\/Font|\/Page|obj|endobj|stream|endstream|xref|trailer)\b/gi, " ")
         .replace(/\\r/g, " ")
         .replace(/\\n/g, " ")
         .replace(/\\t/g, " ")
@@ -1182,62 +1325,100 @@ export async function refreshProfileFromLatestResume() {
     }
 
     await db.updateData((dbData) => {
-        const profile = dbData.profile;
-
-        if (parsed.contact) {
-            if (parsed.contact.email) profile.contactInfo = parsed.contact.email;
-            if (parsed.contact.location) profile.location = parsed.contact.location;
-            if (parsed.contact.linkedin) profile.linkedin = parsed.contact.linkedin;
-            if (parsed.contact.portfolio) profile.portfolio = parsed.contact.portfolio;
-        }
-
-        if (parsed.summary) {
-            profile.summary = parsed.summary;
-        }
-
-        profile.experience = (parsed.experience || []).map((exp: any) => ({
-            id: `exp-${Date.now()}-${Math.random()}`,
-            title: exp.title,
-            company: exp.company,
-            location: exp.location,
-            startDate: exp.startDate,
-            endDate: exp.endDate,
-            bullets: exp.bullets || [],
-            skills: [],
-        }));
-
-        profile.education = (parsed.education || []).map((edu: any) => ({
-            id: `edu-${Date.now()}-${Math.random()}`,
-            school: edu.school,
-            degree: edu.degree,
-            startYear: edu.startYear,
-            endYear: edu.endYear,
-            gpa: edu.gpa,
-        }));
-
-        profile.skills = (parsed.skills || []).map((skill: any) => ({
-            id: `skill-${Date.now()}-${Math.random()}`,
-            name: skill.name,
-            category: skill.category as any,
-        }));
-
-        profile.projects = (parsed.projects || []).map((proj: any) => ({
-            id: `proj-${Date.now()}-${Math.random()}`,
-            name: proj.name,
-            description: proj.description,
-            link: proj.link,
-            bullets: proj.bullets || [],
-            skills: [],
-        }));
-
-        const inferredCustom = inferCustomFieldsFromText(normalizedResumeContent);
-        const combined = [...inferredCustom, ...aiCustomFields];
-        for (const field of combined) {
-            upsertCustomField(profile, field.label, field.value, "Resume");
-        }
+        applyParsedResumeToProfile(dbData.profile, parsed, normalizedResumeContent, aiCustomFields, "replace");
     });
 
     revalidatePath("/profile");
+}
+
+function getResumeUsableText(resume: Resume) {
+    let text = (resume.content || "").trim();
+    const lower = text.toLowerCase();
+    const isPlaceholder =
+        !text ||
+        lower.includes("parsed content would go here") ||
+        lower.includes("resume file uploaded (");
+
+    if (isPlaceholder && resume.originalFileBase64 && (resume.originalMimeType || "").toLowerCase().includes("pdf")) {
+        try {
+            const pdfBytes = Buffer.from(resume.originalFileBase64, "base64");
+            const extracted = extractPdfTextFallback(pdfBytes);
+            if (extracted.length > 200) text = extracted;
+        } catch {
+        }
+    }
+
+    return (text || "").trim();
+}
+
+function computeResumeParseConfidence(parsed: ParsedResumeLike) {
+    const contactScore =
+        (parsed.contact?.email ? 10 : 0) +
+        (parsed.contact?.phone ? 8 : 0) +
+        (parsed.contact?.linkedin ? 8 : 0) +
+        (parsed.contact?.location ? 6 : 0);
+    const summaryScore = cleanText(parsed.summary).length > 40 ? 12 : 0;
+    const expScore = Math.min(24, (parsed.experience || []).length * 8);
+    const eduScore = Math.min(12, (parsed.education || []).length * 6);
+    const skillsScore = Math.min(16, (parsed.skills || []).length * 2);
+    const projectsScore = Math.min(10, (parsed.projects || []).length * 5);
+    const total = Math.min(100, contactScore + summaryScore + expScore + eduScore + skillsScore + projectsScore);
+    return total;
+}
+
+export async function previewResumeParseAction(resumeId: string) {
+    const data = await db.getData();
+    const resume = (data.resumes || []).find((r) => r.id === resumeId);
+    if (!resume) throw new Error("Resume not found.");
+
+    const text = getResumeUsableText(resume);
+    if (!text) throw new Error("This resume has no readable text. Upload a text-readable PDF or paste resume text.");
+
+    const { parseResumeContent } = await import("@/lib/ai");
+    const parsed = await parseResumeContent(text);
+    const confidence = computeResumeParseConfidence(parsed);
+
+    return {
+        resumeId: resume.id,
+        resumeName: resume.name,
+        confidence,
+        parsed,
+        stats: {
+            experience: (parsed.experience || []).length,
+            education: (parsed.education || []).length,
+            skills: (parsed.skills || []).length,
+            projects: (parsed.projects || []).length,
+        },
+    };
+}
+
+export async function applyResumeParseToProfileAction(resumeId: string, mode: "merge" | "replace" = "merge") {
+    const data = await db.getData();
+    const resume = (data.resumes || []).find((r) => r.id === resumeId);
+    if (!resume) throw new Error("Resume not found.");
+
+    const text = getResumeUsableText(resume);
+    if (!text) throw new Error("This resume has no readable text.");
+
+    const { parseResumeContent, inferCustomProfileFields } = await import("@/lib/ai");
+    const parsed = await parseResumeContent(text);
+    const aiCustomFields = await inferCustomProfileFields(text);
+
+    await db.updateData((dbData) => {
+        applyParsedResumeToProfile(dbData.profile, parsed, text, aiCustomFields, mode);
+    });
+
+    revalidatePath("/profile");
+    revalidatePath("/documents");
+    await logAction("APPLY_RESUME_PARSE", `Applied parsed resume ${resume.name} to profile (${mode}).`);
+
+    return {
+        success: true,
+        mode,
+        resumeId: resume.id,
+        resumeName: resume.name,
+        confidence: computeResumeParseConfidence(parsed),
+    };
 }
 
 export async function refreshProfileFromLinkedIn() {
@@ -1449,7 +1630,7 @@ export async function syncProfileFromLinkedInUrl(linkedinUrl: string) {
         if (!data.linkedinProfiles) data.linkedinProfiles = [];
         data.linkedinProfiles.push({
             id: `li-${Date.now()}`,
-            userId: "user-1",
+            userId,
             profileUrl: trimmed,
             name,
             headline,
@@ -1515,9 +1696,11 @@ export async function syncProfileFromLinkedInUrlAndResume(linkedinUrl: string) {
 // --- Content Engine Actions ---
 
 export async function createCoverLetterTemplate(name: string, content: string, category: string = "General") {
+    const scoped = await db.getData();
+    const userId = scoped.user.id;
     const newTemplate: CoverLetterTemplate = {
         id: `tpl-${Date.now()}`,
-        userId: "user-1",
+        userId,
         name,
         content,
         category
@@ -1536,9 +1719,11 @@ export async function deleteCoverLetterTemplate(id: string) {
 }
 
 export async function createAnswerBankItem(question: string, answer: string, tags: string[]) {
+    const scoped = await db.getData();
+    const userId = scoped.user.id;
     const newItem: AnswerBankItem = {
         id: `ans-${Date.now()}`,
-        userId: "user-1",
+        userId,
         question,
         answer,
         tags,
@@ -1566,9 +1751,11 @@ export async function createContact(
     linkedin?: string,
     tags: string[] = []
 ) {
+    const scoped = await db.getData();
+    const userId = scoped.user.id;
     const newContact: Contact = {
         id: `contact-${Date.now()}`,
-        userId: "user-1",
+        userId,
         name: (name || "").trim(),
         company: (company || "").trim(),
         role: (role || "").trim(),
@@ -1607,6 +1794,86 @@ export async function logInteraction(contactId: string, type: string, notes: str
     });
     await logAction("LOG_INTERACTION", `${interaction.type} interaction logged for ${contactId}`);
     revalidatePath("/network");
+}
+
+export async function generateNetworkSearchPlanAction() {
+    const data = await db.getData();
+    const profile = data.profile || ({} as Profile);
+    const latestResume = [...(data.resumes || [])]
+        .sort((a, b) => new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime())[0];
+    const resumeText = (latestResume?.content || "").trim();
+
+    const inferTitlesFromText = (text: string) => {
+        const matches = (text || "").match(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b/g) || [];
+        return matches.filter((m) => /(engineer|developer|manager|architect|analyst|scientist|designer)/i.test(m));
+    };
+    const stopWords = new Set(["and", "or", "not", "with", "for", "the", "a", "an", "to", "of", "in", "on"]);
+
+    const profileTitles = uniqueStrings([
+        ...(profile.experience || []).map((e) => e.title).filter(Boolean),
+        ...inferTitlesFromText(profile.summary || ""),
+        ...inferTitlesFromText(resumeText),
+        "Software Engineer",
+    ]).slice(0, 6);
+    const roleFocus = profileTitles[0] || "Software Engineer";
+
+    const skills = uniqueStrings([
+        ...(profile.skills || []).map((s) => s.name).filter(Boolean),
+        ...tokenize(`${profile.summary || ""} ${resumeText}`).filter((t) => !stopWords.has(t)).slice(0, 24),
+    ]).slice(0, 10);
+
+    const companies = uniqueStrings([
+        ...(data.jobs || []).map((j) => j.company).filter(Boolean),
+        ...(profile.experience || []).map((e) => e.company).filter(Boolean),
+    ]).slice(0, 6);
+
+    const location = (data.settings?.preferredLocation || profile.location || "United States").trim();
+    const outreachTitles = [
+        "Technical Recruiter",
+        "Engineering Manager",
+        "Hiring Manager",
+        "Director of Engineering",
+        "Talent Acquisition",
+        "Recruiter",
+    ];
+    const coreSkills = skills.slice(0, 4);
+
+    const buildQuery = (targetTitle: string, targetCompany?: string) => {
+        const skillClause = coreSkills.length ? `(${coreSkills.join(" OR ")})` : "";
+        const companyClause = targetCompany ? ` AND "${targetCompany}"` : "";
+        const locClause = location ? ` AND (${location} OR Remote)` : "";
+        return `"${targetTitle}" AND (${roleFocus})${skillClause ? ` AND ${skillClause}` : ""}${companyClause}${locClause}`;
+    };
+
+    const rawQueries = [
+        ...outreachTitles.slice(0, 4).map((title) => ({ label: `${title} - broad`, query: buildQuery(title) })),
+        ...companies.slice(0, 4).map((company) => ({ label: `${company} recruiting`, query: buildQuery("Recruiter", company) })),
+    ];
+
+    const queries = uniqueStrings(rawQueries.map((q) => q.query)).slice(0, 8).map((query, i) => {
+        const label = rawQueries.find((x) => x.query === query)?.label || `Target ${i + 1}`;
+        return {
+            id: `net-q-${i + 1}`,
+            label,
+            query,
+            linkedinUrl: `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(query)}`,
+            googleUrl: `https://www.google.com/search?q=${encodeURIComponent(`site:linkedin.com/in ${query}`)}`,
+            xUrl: `https://x.com/search?q=${encodeURIComponent(query)}&src=typed_query`,
+        };
+    });
+
+    if (!queries.length) {
+        throw new Error("Not enough profile/resume signal yet. Upload a resume or add profile details first.");
+    }
+
+    return {
+        generatedAt: new Date().toISOString(),
+        roleFocus,
+        location,
+        coreSkills,
+        companies,
+        queries,
+    };
 }
 
 // --- AI Actions ---
@@ -1738,30 +2005,101 @@ export async function saveSettings(settings: any) {
     });
     revalidatePath("/settings");
 }
+
+export async function getAiModeStatusAction() {
+    const data = await db.getData();
+    const selected = String(data.settings?.aiProvider || "local");
+    const hasOpenAi = Boolean((data.settings?.openaiApiKey || "").trim());
+    const hasGroq = Boolean((data.settings?.groqApiKey || "").trim());
+
+    let effective: "local" | "openai" | "groq" = "local";
+    let note = "Built-in no-token mode is active.";
+
+    if (selected === "openai" && hasOpenAi) {
+        effective = "openai";
+        note = "OpenAI key mode is active.";
+    } else if (selected === "groq" && hasGroq) {
+        effective = "groq";
+        note = "Groq key mode is active.";
+    } else if (selected === "gemini") {
+        effective = "local";
+        note = "Gemini is currently routed to Built-in mode.";
+    } else if ((selected === "openai" && !hasOpenAi) || (selected === "groq" && !hasGroq)) {
+        effective = "local";
+        note = "Provider key missing. Using Built-in no-token mode.";
+    }
+
+    return {
+        selected,
+        effective,
+        noToken: effective === "local",
+        note,
+    };
+}
 // ... existing code ...
 
 export async function generateJobSearchQueriesAction() {
     // 1. Fetch full user context
     const data = await db.getData();
+    const profile = data.profile;
+    const latestLinkedInProfile = [...(data.linkedinProfiles || [])].sort((a, b) => {
+        const aTime = new Date(a.updatedAt || a.createdAt).getTime();
+        const bTime = new Date(b.updatedAt || b.createdAt).getTime();
+        return bTime - aTime;
+    })[0];
     const resume = [...data.resumes].sort((a, b) => {
         const aTime = new Date(a.createdAt).getTime();
         const bTime = new Date(b.createdAt).getTime();
         return bTime - aTime;
     })[0];
+    const safeResumeText = (resume?.content || "").trim();
 
-    if (!resume) {
-        throw new Error("No resume found. Please upload a resume in Documents first.");
-    }
+    const fallbackResult = () => {
+        const preferredLocation = data.settings.preferredLocation || profile.location || latestLinkedInProfile?.location || "United States";
+        const titleCandidates = [
+            ...(profile.experience || []).map((e) => e.title).filter(Boolean),
+            ...data.jobs.map((j) => j.title).filter(Boolean),
+            "Software Engineer",
+            "Frontend Engineer",
+            "Full Stack Developer",
+        ];
+        const keywordCandidates = [
+            ...(profile.skills || []).map((s) => s.name).filter(Boolean),
+            "React",
+            "TypeScript",
+            "Node.js",
+            "JavaScript",
+            "API",
+        ];
+        const recommendedTitles = Array.from(new Set(titleCandidates)).slice(0, 6);
+        const searchKeywords = Array.from(new Set(keywordCandidates)).slice(0, 8);
+        const titleClause = `(${recommendedTitles.slice(0, 3).join(" OR ") || "Software Engineer OR Developer"})`;
+        const keywordClause = `(${searchKeywords.slice(0, 5).join(" OR ") || "React OR TypeScript OR Node.js"})`;
+        return {
+            recommendedTitles,
+            searchKeywords,
+            booleanQueries: [
+                { label: "US Broad", query: `${titleClause} AND ${keywordClause} AND (United States OR USA OR Remote)` },
+                { label: "Remote Focus", query: `${titleClause} AND ${keywordClause} AND (Remote)` },
+                { label: "Preferred Location", query: `${titleClause} AND ${keywordClause} AND (${preferredLocation})` },
+                { label: "Company ATS", query: `${titleClause} AND ${keywordClause} AND (Greenhouse OR Lever OR Workday OR careers)` },
+            ],
+            reasoning: "Generated from local profile data fallback mode. Add a readable resume and AI key for deeper query optimization.",
+            defaultFilters: {
+                location: preferredLocation,
+                usOnly: true,
+                remoteOnly: false,
+                relocation: "any",
+                level: "",
+                minRelevance: 1,
+                postedWithinDays: 30,
+            },
+        };
+    };
 
     // 2. Call AI
     try {
         const { generateSearchQueries } = await import("@/lib/ai");
-        const profile = data.profile;
-        const latestLinkedInProfile = [...(data.linkedinProfiles || [])].sort((a, b) => {
-            const aTime = new Date(a.updatedAt || a.createdAt).getTime();
-            const bTime = new Date(b.updatedAt || b.createdAt).getTime();
-            return bTime - aTime;
-        })[0];
 
         const context = {
             summary: profile.summary || "",
@@ -1776,8 +2114,17 @@ export async function generateJobSearchQueriesAction() {
             linkedinAbout: latestLinkedInProfile?.about || "",
             linkedinRaw: (latestLinkedInProfile?.rawText || "").slice(0, 1200),
         };
+        const aiInput = safeResumeText || [
+            profile.summary || "",
+            ...(profile.experience || []).flatMap((e) => [e.title || "", e.company || "", ...(e.bullets || [])]),
+            ...(profile.projects || []).flatMap((p) => [p.name || "", p.description || ""]),
+        ].join("\n").trim();
 
-        const result = await generateSearchQueries(resume.content, context);
+        if (!aiInput) {
+            return fallbackResult();
+        }
+
+        const result = await generateSearchQueries(aiInput, context);
         const baseTitles = (result?.recommendedTitles || []).filter(Boolean).slice(0, 3);
         const baseKeywords = (result?.searchKeywords || []).filter(Boolean).slice(0, 5);
         const titleClause = baseTitles.length ? `(${baseTitles.join(" OR ")})` : "(Software Engineer OR Developer)";
@@ -1804,6 +2151,7 @@ export async function generateJobSearchQueriesAction() {
                 location: data.settings.preferredLocation || profile.location || latestLinkedInProfile?.location || "United States",
                 usOnly: true,
                 remoteOnly: false,
+                relocation: "any",
                 level: "",
                 minRelevance: 1,
                 postedWithinDays: 30,
@@ -1811,7 +2159,7 @@ export async function generateJobSearchQueriesAction() {
         };
     } catch (error) {
         console.error("AI Generation Error", error);
-        throw new Error((error as Error).message || "Failed to generate search queries");
+        return fallbackResult();
     }
 }
 
@@ -1855,12 +2203,13 @@ export async function getJobSearchPersonalizationStatusAction() {
     };
 }
 
-export async function scanEmailsAction() {
+export async function scanEmailsAction(mode: "recent" | "history" = "recent") {
     try {
         const { checkEmailsForUpdates } = await import("@/lib/email");
-        const result = await checkEmailsForUpdates();
+        const result = await checkEmailsForUpdates({ mode });
         revalidatePath("/dashboard");
         revalidatePath("/applications");
+        revalidatePath("/jobs");
         return result;
     } catch (error) {
         console.error("Scan Error", error);
@@ -2341,6 +2690,17 @@ export async function searchJobsAction(
             const roleCompany = `${title} ${company}`;
             const roleCompanyLocation = `${roleCompany} ${job.location || ""}`.trim();
             const safeUrl = isHttpUrl(job.url) ? job.url : buildFallbackUrl(title, company);
+            const locationText = `${job.location || ""} ${job.description || ""}`.toLowerCase();
+            const highlights: string[] = [];
+            if (isLikelyUS(locationText)) highlights.push("US aligned");
+            if (isLikelyRemote(locationText)) highlights.push("Remote-friendly");
+            if (withinDays(job.postedDate, 7)) highlights.push("Fresh posting");
+            if (isCompanyAtsDomain(safeUrl)) highlights.push("Company ATS");
+            const matchedTerms = terms
+                .filter((t) => title.toLowerCase().includes(t) || (job.description || "").toLowerCase().includes(t))
+                .slice(0, 3);
+            if (matchedTerms.length) highlights.push(`Matched: ${matchedTerms.join(", ")}`);
+            const matchTier = score >= 35 ? "High" : score >= 18 ? "Medium" : "Low";
             return {
                 id: job.id.toString(),
                 title,
@@ -2353,6 +2713,8 @@ export async function searchJobsAction(
                 category: job.category,
                 source: job.source || "Unknown Source",
                 relevance: score,
+                matchTier,
+                highlights,
                 linkedinUrl: `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(roleCompanyLocation)}`,
                 indeedUrl: `https://www.indeed.com/jobs?q=${encodeURIComponent(roleCompanyLocation)}`,
                 companySiteUrl: `https://www.google.com/search?q=${encodeURIComponent(`${company} careers`)}`,
@@ -2367,10 +2729,13 @@ export async function searchJobsAction(
     }
 }
 
-export async function addJobFromSearchAction(jobData: any) {
+export async function addJobFromSearchAction(jobData: any, options?: { queueAutoApply?: boolean }) {
+    const scoped = await db.getData();
+    const userId = scoped.user.id;
+    const shouldQueue = Boolean(options?.queueAutoApply);
     const newJob: Job = {
         id: `job-${Date.now()}`,
-        userId: "user-1",
+        userId,
         company: jobData.company,
         title: jobData.title,
         link: jobData.url,
@@ -2383,7 +2748,7 @@ export async function addJobFromSearchAction(jobData: any) {
 
     const newApplication: Application = {
         id: `app-${Date.now()}`,
-        userId: "user-1",
+        userId,
         jobId: newJob.id,
         job: newJob,
         status: "INTERESTED",
@@ -2398,16 +2763,47 @@ export async function addJobFromSearchAction(jobData: any) {
         updatedAt: new Date(),
     };
 
+    let queued = 0;
+    let skipped = 0;
+
     await db.updateData((data) => {
+        const settings: any = data.settings || {};
         data.jobs.push(newJob);
         data.applications.push(newApplication);
+
+        if (shouldQueue) {
+            const queue: any[] = Array.isArray(settings.autoApplyQueue) ? settings.autoApplyQueue : [];
+            const existingAppIds = new Set(
+                queue
+                    .filter((t) => ["pending", "running"].includes(String(t.status || "")))
+                    .map((t) => String(t.applicationId || ""))
+            );
+            if (!newApplication.job?.link || existingAppIds.has(newApplication.id)) {
+                skipped += 1;
+            } else {
+                queue.push({
+                    id: `aat-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                    applicationId: newApplication.id,
+                    jobUrl: newApplication.job.link,
+                    status: "pending",
+                    attempts: 0,
+                    lastError: "",
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString(),
+                });
+                queued += 1;
+            }
+            settings.autoApplyQueue = queue;
+            data.settings = settings;
+        }
     });
 
     revalidatePath("/jobs");
     revalidatePath("/applications");
     revalidatePath("/dashboard");
+    if (shouldQueue) revalidatePath("/settings");
 
-    return newApplication.id;
+    return { applicationId: newApplication.id, queued, skipped };
 }
 
 export async function clearAllMyDataAction() {
@@ -2467,3 +2863,82 @@ export async function adminDeleteUserAction(userId: string) {
     await logAction("ADMIN_DELETE_USER", `Admin deleted user ${userId}`, "admin");
     revalidatePath("/admin");
 }
+
+export async function enqueueAutoApplyTasksAction(applicationIds: string[]) {
+    const ids = Array.from(new Set((applicationIds || []).map((x) => String(x).trim()).filter(Boolean)));
+    if (!ids.length) {
+        return { queued: 0, skipped: 0 };
+    }
+
+    const scoped = await db.getData();
+    const appsById = new Map((scoped.applications || []).map((a) => [a.id, a]));
+    let queued = 0;
+    let skipped = 0;
+
+    await db.updateData((data) => {
+        const settings: any = data.settings || {};
+        const queue: any[] = Array.isArray(settings.autoApplyQueue) ? settings.autoApplyQueue : [];
+        const existingAppIds = new Set(
+            queue
+                .filter((t) => ["pending", "running"].includes(String(t.status || "")))
+                .map((t) => String(t.applicationId || ""))
+        );
+
+        for (const id of ids) {
+            const app = appsById.get(id);
+            if (!app || !app.job?.link) {
+                skipped += 1;
+                continue;
+            }
+            if (existingAppIds.has(id)) {
+                skipped += 1;
+                continue;
+            }
+            queue.push({
+                id: `aat-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                applicationId: id,
+                jobUrl: app.job.link,
+                status: "pending",
+                attempts: 0,
+                lastError: "",
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+            });
+            existingAppIds.add(id);
+            queued += 1;
+        }
+
+        settings.autoApplyQueue = queue;
+        data.settings = settings;
+    });
+
+    await logAction("AUTOAPPLY_ENQUEUE", `Queued ${queued} application(s), skipped ${skipped}.`);
+    revalidatePath("/applications");
+    revalidatePath("/settings");
+    return { queued, skipped };
+}
+
+export async function updateAutoApplySettingsAction(input: { enabled?: boolean; autoSubmit?: boolean }) {
+    await db.updateData((data) => {
+        const settings: any = data.settings || {};
+        if (typeof input.enabled === "boolean") settings.autoApplyEnabled = input.enabled;
+        if (typeof input.autoSubmit === "boolean") settings.autoApplyAutoSubmit = input.autoSubmit;
+        data.settings = settings;
+    });
+    await logAction("AUTOAPPLY_SETTINGS", `AutoApply settings updated.`);
+    revalidatePath("/applications");
+    revalidatePath("/settings");
+}
+
+export async function clearAutoApplyQueueAction() {
+    await db.updateData((data) => {
+        const settings: any = data.settings || {};
+        settings.autoApplyQueue = [];
+        data.settings = settings;
+    });
+    await logAction("AUTOAPPLY_CLEAR_QUEUE", "Cleared auto-apply queue.");
+    revalidatePath("/applications");
+    revalidatePath("/settings");
+}
+    const scoped = await db.getData();
+    const userId = scoped.user.id;

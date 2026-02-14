@@ -1,4 +1,4 @@
-type ParsedContact = {
+﻿type ParsedContact = {
     name: string;
     email: string;
     phone: string;
@@ -55,18 +55,48 @@ function normalizeText(input: string) {
         .trim();
 }
 
+function isLikelyHeadingLine(line: string) {
+    const t = (line || "").trim();
+    if (!t || t.length > 64) return false;
+    const cleaned = t.replace(/:$/, "");
+    if (/^[A-Z][A-Za-z &/()-]{2,}$/.test(cleaned)) return true;
+    if (cleaned === cleaned.toUpperCase() && /[A-Z]/.test(cleaned)) return true;
+    return false;
+}
+
 function sectionSlice(text: string, headings: string[]) {
     const lines = text.split("\n");
     const lowered = lines.map((l) => l.trim().toLowerCase());
-    const target = headings.map((h) => h.toLowerCase());
+    const target = headings.map((h) => h.toLowerCase().trim());
+    const headingSet = [
+        "experience",
+        "work experience",
+        "professional experience",
+        "education",
+        "skills",
+        "technical skills",
+        "core skills",
+        "projects",
+        "personal projects",
+        "summary",
+        "profile",
+        "about",
+        "certifications",
+        "languages",
+        "awards",
+    ];
 
-    const start = lowered.findIndex((l) => target.includes(l.replace(/:$/, "")));
+    const start = lowered.findIndex((l) => {
+        const clean = l.replace(/:$/, "");
+        return target.some((h) => clean === h || clean.includes(h));
+    });
     if (start === -1) return "";
 
     let end = lines.length;
     for (let i = start + 1; i < lines.length; i++) {
+        const raw = lines[i].trim();
         const v = lowered[i].replace(/:$/, "");
-        if (["experience", "work experience", "education", "skills", "projects", "summary", "profile", "about"].includes(v)) {
+        if (headingSet.some((h) => v === h || v.includes(h)) && isLikelyHeadingLine(raw)) {
             end = i;
             break;
         }
@@ -92,32 +122,46 @@ function toSkillCategory(name: string): "Technical" | "Soft" | "Language" | "Too
     return "Soft";
 }
 
+function cleanUrl(url: string) {
+    const v = (url || "").trim();
+    if (!v) return "";
+    if (/^https?:\/\//i.test(v)) return v;
+    if (/^www\./i.test(v)) return `https://${v}`;
+    return v;
+}
+
 export function parseResumeLocally(rawText: string): ParsedResume {
     const text = normalizeText(rawText);
     const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-    const top = lines.slice(0, 25).join("\n");
+    const top = lines.slice(0, 40).join("\n");
 
     const email = (top.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || [""])[0];
     const phone = (top.match(/(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}/) || [""])[0];
-    const linkedInMatch = top.match(/https?:\/\/(?:www\.)?linkedin\.com\/[^\s)]+/i);
-    const portfolioMatch = top.match(/https?:\/\/(?!.*linkedin\.com)[^\s)]+/i);
-    const locationMatch = top.match(/\b[A-Za-z .'-]+,\s*[A-Z]{2}\b/);
+    const linkedInMatch =
+        top.match(/https?:\/\/(?:www\.)?linkedin\.com\/[^\s)]+/i) ||
+        top.match(/\b(?:www\.)?linkedin\.com\/[^\s)]+/i);
+    const portfolioMatch =
+        top.match(/https?:\/\/(?!.*linkedin\.com)[^\s)]+/i) ||
+        top.match(/\b(?:www\.)?(?:github\.com|gitlab\.com|behance\.net|medium\.com)\/[^\s)]+/i);
+    const locationMatch = top.match(/\b[A-Za-z .'-]+,\s*[A-Z]{2}\b|\bRemote\b/i);
 
     const firstLineNameCandidate = lines[0] || "";
     const name =
         firstLineNameCandidate &&
             !firstLineNameCandidate.includes("@") &&
             !/https?:\/\//i.test(firstLineNameCandidate) &&
-            !/\d{3}/.test(firstLineNameCandidate)
+            !/\d{3}/.test(firstLineNameCandidate) &&
+            firstLineNameCandidate.split(/\s+/).length <= 5
             ? firstLineNameCandidate
             : "";
 
     const summarySection = sectionSlice(text, ["summary", "profile", "about"]);
-    const summary = summarySection ? summarySection.split("\n").slice(0, 3).join(" ").trim() : "";
+    const summary = summarySection ? summarySection.split("\n").slice(0, 4).join(" ").trim() : "";
 
     const skillsSection = sectionSlice(text, ["skills", "technical skills", "core skills"]);
     const rawSkillTokens = (skillsSection || "")
-        .split(/[\n,|•\-]+/)
+        .replace(/[\u2022\u00b7]/g, "\n")
+        .split(/[\n,;|/]+/)
         .map((s) => s.trim())
         .filter((s) => s.length > 1 && s.length < 40);
     const skillNames = unique(rawSkillTokens).slice(0, 40);
@@ -136,11 +180,27 @@ export function parseResumeLocally(rawText: string): ParsedResume {
             const bLines = block.split("\n").map((l) => l.trim()).filter(Boolean);
             const first = bLines[0] || "";
             const second = bLines[1] || "";
-            const dateMatch = block.match(/((?:19|20)\d{2}(?:[-/](?:0?[1-9]|1[0-2]))?)\s*(?:-|to)\s*(Present|Current|(?:19|20)\d{2}(?:[-/](?:0?[1-9]|1[0-2]))?)/i);
-            const bullets = bLines.filter((l) => /^[•*-]/.test(l)).map((l) => l.replace(/^[•*-]\s*/, "")).slice(0, 8);
+            const dateMatch = block.match(/((?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+)?(?:19|20)\d{2})\s*(?:-|to|–)\s*(Present|Current|(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+)?(?:19|20)\d{2})/i);
+
+            let title = first;
+            let company = second;
+            const splitFirst = first.split(/\s*\|\s*|\s+@\s+|\s+ at \s+|,\s+/i).map((x) => x.trim()).filter(Boolean);
+            if (splitFirst.length >= 2) {
+                title = splitFirst[0];
+                company = splitFirst[1];
+            }
+
+            let bullets = bLines
+                .filter((l) => /^[\u2022*\-]/.test(l))
+                .map((l) => l.replace(/^[\u2022*\-]\s*/, ""))
+                .slice(0, 8);
+            if (!bullets.length) {
+                bullets = bLines.slice(2).filter((l) => l.length > 25).slice(0, 6);
+            }
+
             return {
-                title: first,
-                company: second,
+                title,
+                company,
                 location: (block.match(/\b[A-Za-z .'-]+,\s*[A-Z]{2}\b/) || [""])[0],
                 startDate: dateMatch?.[1] || "",
                 endDate: dateMatch?.[2] || "",
@@ -159,9 +219,10 @@ export function parseResumeLocally(rawText: string): ParsedResume {
             const bLines = block.split("\n").map((l) => l.trim()).filter(Boolean);
             const years = block.match(/((?:19|20)\d{2})(?:\s*-\s*((?:19|20)\d{2}|Present))?/i);
             const gpa = (block.match(/GPA[:\s]*([0-4]\.\d{1,2})/i) || ["", ""])[1];
+            const maybeDegreeLine = bLines.find((l) => /(b\.?s\.?|bachelor|m\.?s\.?|master|ph\.?d|doctor|mba|associate)/i.test(l)) || bLines[1] || "";
             return {
                 school: bLines[0] || "",
-                degree: bLines[1] || "",
+                degree: maybeDegreeLine,
                 startYear: years?.[1] || "",
                 endYear: years?.[2] || "",
                 gpa: gpa || "",
@@ -178,10 +239,16 @@ export function parseResumeLocally(rawText: string): ParsedResume {
         .map((block) => {
             const bLines = block.split("\n").map((l) => l.trim()).filter(Boolean);
             const link = (block.match(/https?:\/\/[^\s)]+/i) || [""])[0];
-            const bullets = bLines.filter((l) => /^[•*-]/.test(l)).map((l) => l.replace(/^[•*-]\s*/, "")).slice(0, 8);
+            let bullets = bLines
+                .filter((l) => /^[\u2022*\-]/.test(l))
+                .map((l) => l.replace(/^[\u2022*\-]\s*/, ""))
+                .slice(0, 8);
+            if (!bullets.length) {
+                bullets = bLines.slice(1).filter((l) => l.length > 20).slice(0, 4);
+            }
             return {
                 name: bLines[0] || "",
-                description: bLines.slice(1, 3).join(" "),
+                description: (bLines.find((l) => !/^[\u2022*\-]/.test(l) && l !== bLines[0]) || bLines.slice(1, 3).join(" ")).trim(),
                 link,
                 bullets,
             };
@@ -193,8 +260,8 @@ export function parseResumeLocally(rawText: string): ParsedResume {
             name,
             email,
             phone,
-            linkedin: linkedInMatch?.[0] || "",
-            portfolio: portfolioMatch?.[0] || "",
+            linkedin: cleanUrl(linkedInMatch?.[0] || ""),
+            portfolio: cleanUrl(portfolioMatch?.[0] || ""),
             location: locationMatch?.[0] || "",
         },
         summary,
@@ -204,3 +271,4 @@ export function parseResumeLocally(rawText: string): ParsedResume {
         projects,
     };
 }
+

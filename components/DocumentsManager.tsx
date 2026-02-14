@@ -1,7 +1,9 @@
 "use client";
 
 import { Job, Resume } from "@/lib/types";
-import { addWorkshopResumeToLibrary, applyWorkshopResumeVariant, autoPopulateWorkshopFromJobs, createCoverLetterTemplate, deleteResume, generateWorkshopCoverLetter, generateWorkshopResumePreview, getWorkshopInsights, saveWorkshopAnswersAndSyncProfile, updateResumeWorkshopMetadata, uploadResume } from "@/app/actions";
+import { addWorkshopResumeToLibrary, applyResumeParseToProfileAction, applyWorkshopResumeVariant, autoPopulateWorkshopFromJobs, createCoverLetterTemplate, deleteResume, generateWorkshopCoverLetter, generateWorkshopResumePreview, getWorkshopInsights, previewResumeParseAction, saveWorkshopAnswersAndSyncProfile, updateResumeWorkshopMetadata, uploadResume } from "@/app/actions";
+import { AiModeBadge } from "@/components/AiModeBadge";
+import { pushToast } from "@/lib/client-toast";
 import { useRef, useState } from "react";
 import { FileText, Upload, Trash2, Loader2, Wrench, FolderOpen, Save, Sparkles, Check, Wand2, BarChart3, Download } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -60,6 +62,33 @@ type CoverLetterDraft = {
     whyCompany: string;
     jobDescription: string;
     additionalInfo: string;
+};
+
+type ResumeParsePreview = {
+    resumeId: string;
+    resumeName: string;
+    confidence: number;
+    parsed: {
+        contact?: {
+            name?: string;
+            email?: string;
+            phone?: string;
+            linkedin?: string;
+            portfolio?: string;
+            location?: string;
+        };
+        summary?: string;
+        experience?: Array<{ title?: string; company?: string; startDate?: string; endDate?: string; bullets?: string[] }>;
+        education?: Array<{ school?: string; degree?: string; startYear?: string; endYear?: string }>;
+        skills?: Array<{ name?: string }>;
+        projects?: Array<{ name?: string; description?: string }>;
+    };
+    stats: {
+        experience: number;
+        education: number;
+        skills: number;
+        projects: number;
+    };
 };
 
 const WORKSHOP_QUESTION_FLOW: WorkshopQuestion[] = [
@@ -232,6 +261,10 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
     const [savingCoverTemplateResumeId, setSavingCoverTemplateResumeId] = useState<string | null>(null);
     const [addingResumeLibraryId, setAddingResumeLibraryId] = useState<string | null>(null);
     const [addingCoverLibraryId, setAddingCoverLibraryId] = useState<string | null>(null);
+    const [reviewingParseResumeId, setReviewingParseResumeId] = useState<string | null>(null);
+    const [applyingParseResumeId, setApplyingParseResumeId] = useState<string | null>(null);
+    const [parseReviewByResumeId, setParseReviewByResumeId] = useState<Record<string, ResumeParsePreview>>({});
+    const [replaceModeByResumeId, setReplaceModeByResumeId] = useState<Record<string, boolean>>({});
     const [generatedPreviewByResumeId, setGeneratedPreviewByResumeId] = useState<Record<string, string>>({});
     const [insightsByResumeId, setInsightsByResumeId] = useState<Record<string, WorkshopInsights>>({});
     const [previewModeByResumeId, setPreviewModeByResumeId] = useState<Record<string, PreviewMode>>({});
@@ -307,9 +340,10 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
             formData.append("file", e.target.files[0]);
             try {
                 await uploadResume(formData);
+                pushToast("Resume uploaded successfully.", "success");
                 router.refresh();
             } catch {
-                alert("Upload failed");
+                pushToast("Upload failed.", "error");
             } finally {
                 setIsUploading(false);
                 if (fileInputRef.current) fileInputRef.current.value = "";
@@ -321,11 +355,39 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
         setDeletingResumeId(resumeId);
         try {
             await deleteResume(resumeId);
+            pushToast("Resume deleted.", "success");
             router.refresh();
         } catch {
-            alert("Delete failed");
+            pushToast("Delete failed.", "error");
         } finally {
             setDeletingResumeId(null);
+        }
+    };
+
+    const handleReviewParse = async (resumeId: string) => {
+        setReviewingParseResumeId(resumeId);
+        try {
+            const preview = await previewResumeParseAction(resumeId);
+            setParseReviewByResumeId((prev) => ({ ...prev, [resumeId]: preview as ResumeParsePreview }));
+            pushToast("Resume parse generated.", "success");
+        } catch (error) {
+            pushToast((error as Error).message || "Failed to parse resume.", "error");
+        } finally {
+            setReviewingParseResumeId(null);
+        }
+    };
+
+    const handleApplyParse = async (resumeId: string) => {
+        setApplyingParseResumeId(resumeId);
+        try {
+            const replace = Boolean(replaceModeByResumeId[resumeId]);
+            await applyResumeParseToProfileAction(resumeId, replace ? "replace" : "merge");
+            pushToast(replace ? "Profile replaced from parsed resume." : "Parsed resume merged into profile.", "success");
+            router.refresh();
+        } catch (error) {
+            pushToast((error as Error).message || "Failed to apply parsed resume.", "error");
+        } finally {
+            setApplyingParseResumeId(null);
         }
     };
 
@@ -335,9 +397,10 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
         try {
             const skills = draft.focusSkills.split(",").map((s) => s.trim()).filter(Boolean);
             await updateResumeWorkshopMetadata(resumeId, draft.targetRole, skills, draft.jobPreferences);
+            pushToast("Workshop metadata saved.", "success");
             router.refresh();
         } catch {
-            alert("Failed to save workshop metadata");
+            pushToast("Failed to save workshop metadata.", "error");
         } finally {
             setSavingResumeId(null);
         }
@@ -348,8 +411,9 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
         try {
             const generated = await generateWorkshopResumePreview(resumeId);
             setGeneratedPreviewByResumeId((prev) => ({ ...prev, [resumeId]: generated }));
+            pushToast("Resume preview generated.", "success");
         } catch (error) {
-            alert((error as Error).message || "Failed to generate resume.");
+            pushToast((error as Error).message || "Failed to generate resume.", "error");
         } finally {
             setGeneratingResumeId(null);
         }
@@ -358,7 +422,7 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
     const handleApplyGenerated = async (resumeId: string) => {
         const content = generatedPreviewByResumeId[resumeId];
         if (!content || !content.trim()) {
-            alert("Generate a preview first.");
+            pushToast("Generate a preview first.", "info");
             return;
         }
 
@@ -366,9 +430,9 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
         try {
             await applyWorkshopResumeVariant(resumeId, content);
             router.refresh();
-            alert("Saved as new resume version.");
+            pushToast("Saved as new resume version.", "success");
         } catch (error) {
-            alert((error as Error).message || "Failed to save generated resume.");
+            pushToast((error as Error).message || "Failed to save generated resume.", "error");
         } finally {
             setApplyingResumeId(null);
         }
@@ -378,9 +442,10 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
         setAutofillingResumeId(resumeId);
         try {
             await autoPopulateWorkshopFromJobs(resumeId);
+            pushToast("Workshop fields auto-filled from jobs.", "success");
             router.refresh();
         } catch (error) {
-            alert((error as Error).message || "Failed to auto-fill workshop fields.");
+            pushToast((error as Error).message || "Failed to auto-fill workshop fields.", "error");
         } finally {
             setAutofillingResumeId(null);
         }
@@ -391,8 +456,9 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
         try {
             const insights = await getWorkshopInsights(resumeId);
             setInsightsByResumeId((prev) => ({ ...prev, [resumeId]: insights }));
+            pushToast("Workshop insights generated.", "success");
         } catch (error) {
-            alert((error as Error).message || "Failed to generate workshop insights.");
+            pushToast((error as Error).message || "Failed to generate workshop insights.", "error");
         } finally {
             setInsightsLoadingResumeId(null);
         }
@@ -404,9 +470,10 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
         setSavingAnswersResumeId(resumeId);
         try {
             await saveWorkshopAnswersAndSyncProfile(resumeId, draft);
+            pushToast("Workshop answers saved and profile synced.", "success");
             router.refresh();
         } catch (error) {
-            alert((error as Error).message || "Failed to save answers.");
+            pushToast((error as Error).message || "Failed to save answers.", "error");
         } finally {
             setSavingAnswersResumeId(null);
         }
@@ -420,7 +487,7 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
         const title = (draft.title || selectedJob?.title || "").trim();
         const jobDescription = (draft.jobDescription || selectedJob?.description || "").trim();
         if (!company || !title) {
-            alert("Add company and role title first.");
+            pushToast("Add company and role title first.", "info");
             return;
         }
 
@@ -433,8 +500,9 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
                 jobDescription,
             });
             setCoverLetterPreviewByResumeId((prev) => ({ ...prev, [resumeId]: result.content }));
+            pushToast("Cover letter generated.", "success");
         } catch (error) {
-            alert((error as Error).message || "Failed to generate cover letter.");
+            pushToast((error as Error).message || "Failed to generate cover letter.", "error");
         } finally {
             setGeneratingCoverLetterResumeId(null);
         }
@@ -444,7 +512,7 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
         const draft = coverLetterDrafts[resumeId];
         const content = coverLetterPreviewByResumeId[resumeId] || "";
         if (!draft || !content.trim()) {
-            alert("Generate a cover letter first.");
+            pushToast("Generate a cover letter first.", "info");
             return;
         }
 
@@ -456,8 +524,9 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
                 "Workshop"
             );
             router.refresh();
+            pushToast("Cover letter template saved.", "success");
         } catch (error) {
-            alert((error as Error).message || "Failed to save template.");
+            pushToast((error as Error).message || "Failed to save template.", "error");
         } finally {
             setSavingCoverTemplateResumeId(null);
         }
@@ -466,15 +535,16 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
     const handleAddResumeToLibrary = async (resumeId: string) => {
         const content = generatedPreviewByResumeId[resumeId] || "";
         if (!content.trim()) {
-            alert("Generate a resume preview first.");
+            pushToast("Generate a resume preview first.", "info");
             return;
         }
         setAddingResumeLibraryId(resumeId);
         try {
             await addWorkshopResumeToLibrary(resumeId, content);
+            pushToast("Resume added to library.", "success");
             router.refresh();
         } catch (error) {
-            alert((error as Error).message || "Failed to add resume to library.");
+            pushToast((error as Error).message || "Failed to add resume to library.", "error");
         } finally {
             setAddingResumeLibraryId(null);
         }
@@ -484,7 +554,7 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
         const draft = coverLetterDrafts[resumeId];
         const content = coverLetterPreviewByResumeId[resumeId] || "";
         if (!draft || !content.trim()) {
-            alert("Generate a cover letter first.");
+            pushToast("Generate a cover letter first.", "info");
             return;
         }
         setAddingCoverLibraryId(resumeId);
@@ -495,8 +565,9 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
                 "Library"
             );
             router.refresh();
+            pushToast("Cover letter added to library.", "success");
         } catch (error) {
-            alert((error as Error).message || "Failed to add cover letter to library.");
+            pushToast((error as Error).message || "Failed to add cover letter to library.", "error");
         } finally {
             setAddingCoverLibraryId(null);
         }
@@ -534,6 +605,9 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
                 <div>
                     <h2 className="text-3xl font-bold tracking-tight">Documents</h2>
                     <p className="text-muted-foreground">Manage resumes and prep job-specific versions.</p>
+                    <div className="mt-2">
+                        <AiModeBadge />
+                    </div>
                 </div>
                 <div>
                     <input
@@ -584,46 +658,117 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
                         <FileText className="text-blue-500" /> Resumes ({initialResumes.length})
                     </h3>
                     <div className="grid gap-4">
-                        {initialResumes.map((resume) => (
-                            <div key={resume.id} className="bg-white p-4 rounded-lg border shadow-sm flex items-start justify-between group hover:border-blue-300 transition">
-                                <div className="flex gap-4">
-                                    <div className="h-10 w-10 bg-red-50 text-red-600 rounded flex items-center justify-center">
-                                        <span className="text-xs font-bold">PDF</span>
+                        {initialResumes.map((resume) => {
+                            const review = parseReviewByResumeId[resume.id];
+                            const confidenceTone =
+                                (review?.confidence || 0) >= 75
+                                    ? "text-emerald-700 bg-emerald-50 border-emerald-200"
+                                    : (review?.confidence || 0) >= 50
+                                        ? "text-amber-700 bg-amber-50 border-amber-200"
+                                        : "text-red-700 bg-red-50 border-red-200";
+                            return (
+                                <div key={resume.id} className="space-y-2">
+                                    <div className="bg-white p-4 rounded-lg border shadow-sm flex items-start justify-between group hover:border-blue-300 transition">
+                                        <div className="flex gap-4">
+                                            <div className="h-10 w-10 bg-red-50 text-red-600 rounded flex items-center justify-center">
+                                                <span className="text-xs font-bold">PDF</span>
+                                            </div>
+                                            <div>
+                                                <h4 className="font-medium text-slate-900">{resume.name}</h4>
+                                                <p className="text-xs text-slate-500">Added {new Date(resume.createdAt).toLocaleDateString()}</p>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-1">
+                                            <button
+                                                onClick={() => handleReviewParse(resume.id)}
+                                                disabled={reviewingParseResumeId === resume.id}
+                                                className="px-2.5 py-1.5 text-xs rounded border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                                            >
+                                                {reviewingParseResumeId === resume.id ? "Parsing..." : "Review Parse"}
+                                            </button>
+                                            {resume.originalFileBase64 ? (
+                                                <a
+                                                    href={`/api/resumes/${resume.id}/download`}
+                                                    className="p-2 hover:bg-blue-50 text-slate-500 hover:text-blue-600 rounded"
+                                                    aria-label={`Download original file ${resume.name}`}
+                                                >
+                                                    <Download size={16} />
+                                                </a>
+                                            ) : (
+                                                <button
+                                                    onClick={() => downloadPdfFile(`${resume.name.replace(/\.[^.]+$/, "")}.pdf`, resume.content || "")}
+                                                    className="p-2 hover:bg-blue-50 text-slate-500 hover:text-blue-600 rounded"
+                                                    aria-label={`Download ${resume.name} as PDF`}
+                                                >
+                                                    <Download size={16} />
+                                                </button>
+                                            )}
+                                            <button
+                                                onClick={() => handleDeleteResume(resume.id)}
+                                                disabled={deletingResumeId === resume.id}
+                                                className="p-2 hover:bg-red-50 text-slate-500 hover:text-red-500 rounded disabled:opacity-50"
+                                                aria-label={`Delete ${resume.name}`}
+                                            >
+                                                {deletingResumeId === resume.id ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                                            </button>
+                                        </div>
                                     </div>
-                                    <div>
-                                        <h4 className="font-medium text-slate-900">{resume.name}</h4>
-                                        <p className="text-xs text-slate-500">Added {new Date(resume.createdAt).toLocaleDateString()}</p>
-                                    </div>
-                                </div>
-                                <div className="flex items-center gap-1">
-                                    {resume.originalFileBase64 ? (
-                                        <a
-                                            href={`/api/resumes/${resume.id}/download`}
-                                            className="p-2 hover:bg-blue-50 text-slate-500 hover:text-blue-600 rounded"
-                                            aria-label={`Download original file ${resume.name}`}
-                                        >
-                                            <Download size={16} />
-                                        </a>
-                                    ) : (
-                                        <button
-                                            onClick={() => downloadPdfFile(`${resume.name.replace(/\.[^.]+$/, "")}.pdf`, resume.content || "")}
-                                            className="p-2 hover:bg-blue-50 text-slate-500 hover:text-blue-600 rounded"
-                                            aria-label={`Download ${resume.name} as PDF`}
-                                        >
-                                            <Download size={16} />
-                                        </button>
+
+                                    {review && (
+                                        <div className="rounded-lg border bg-slate-50 p-3 space-y-3">
+                                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                                <div className="flex items-center gap-2">
+                                                    <p className="text-sm font-semibold text-slate-900">Parse Review</p>
+                                                    <span className={`rounded-full border px-2 py-0.5 text-[11px] ${confidenceTone}`}>
+                                                        Confidence {review.confidence}%
+                                                    </span>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <label className="inline-flex items-center gap-1 text-xs text-slate-700">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={Boolean(replaceModeByResumeId[resume.id])}
+                                                            onChange={(e) =>
+                                                                setReplaceModeByResumeId((prev) => ({ ...prev, [resume.id]: e.target.checked }))
+                                                            }
+                                                            className="h-3.5 w-3.5 rounded border-slate-300"
+                                                        />
+                                                        Replace profile sections
+                                                    </label>
+                                                    <button
+                                                        onClick={() => handleApplyParse(resume.id)}
+                                                        disabled={applyingParseResumeId === resume.id}
+                                                        className="inline-flex items-center rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                                                    >
+                                                        {applyingParseResumeId === resume.id ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
+                                                        Apply to Profile
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div className="grid gap-2 md:grid-cols-4">
+                                                <StatPill label="Experience" value={review.stats.experience} />
+                                                <StatPill label="Education" value={review.stats.education} />
+                                                <StatPill label="Skills" value={review.stats.skills} />
+                                                <StatPill label="Projects" value={review.stats.projects} />
+                                            </div>
+                                            <div className="grid gap-3 md:grid-cols-2">
+                                                <div className="rounded-md border bg-white p-2">
+                                                    <p className="text-xs font-semibold text-slate-700">Contact</p>
+                                                    <p className="text-xs text-slate-600 mt-1">
+                                                        {(review.parsed.contact?.name || "No name")} | {(review.parsed.contact?.email || "No email")}
+                                                    </p>
+                                                    <p className="text-xs text-slate-500">{review.parsed.contact?.linkedin || review.parsed.contact?.portfolio || "No profile links"}</p>
+                                                </div>
+                                                <div className="rounded-md border bg-white p-2">
+                                                    <p className="text-xs font-semibold text-slate-700">Summary</p>
+                                                    <p className="text-xs text-slate-600 mt-1 line-clamp-3">{review.parsed.summary || "No summary extracted."}</p>
+                                                </div>
+                                            </div>
+                                        </div>
                                     )}
-                                    <button
-                                        onClick={() => handleDeleteResume(resume.id)}
-                                        disabled={deletingResumeId === resume.id}
-                                        className="p-2 hover:bg-red-50 text-slate-500 hover:text-red-500 rounded disabled:opacity-50"
-                                        aria-label={`Delete ${resume.name}`}
-                                    >
-                                        {deletingResumeId === resume.id ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
-                                    </button>
                                 </div>
-                            </div>
-                        ))}
+                            );
+                        })}
                         {initialResumes.length === 0 && (
                             <div className="text-center py-8 text-slate-500 bg-slate-50 rounded border border-dashed hover:bg-slate-100 cursor-pointer" onClick={handleUploadClick}>
                                 Click to upload a resume
@@ -1301,3 +1446,15 @@ export default function DocumentsManager({ initialResumes, initialJobs }: { init
         </div>
     );
 }
+
+function StatPill({ label, value }: { label: string; value: number }) {
+    return (
+        <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5">
+            <p className="text-[10px] uppercase tracking-wide text-slate-500">{label}</p>
+            <p className="text-sm font-semibold text-slate-900">{value}</p>
+        </div>
+    );
+}
+
+
+
