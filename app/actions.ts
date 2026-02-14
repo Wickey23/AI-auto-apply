@@ -7,6 +7,11 @@ import { redirect } from "next/navigation";
 import { logAction } from "@/lib/audit";
 import { cookies } from "next/headers";
 import { ADMIN_SESSION_COOKIE, verifyAdminSessionToken } from "@/lib/auth";
+import zlib from "zlib";
+import fs from "fs";
+import os from "os";
+import path from "path";
+import { execFileSync, spawnSync } from "child_process";
 
 export async function createJob(formData: FormData) {
     const company = formData.get("company") as string;
@@ -116,8 +121,8 @@ export async function uploadResume(formData: FormData) {
         ? rawText
         : `Resume file uploaded (${file.name}). The original file is saved for download. For best workshop generation, upload a text-readable resume or paste cleaned resume text.`;
     const pdfExtractedText =
-        (!isReadableText && mimeType.includes("pdf")) ? extractPdfTextFallback(bytes) : "";
-    const effectiveResumeContent = pdfExtractedText.length > 200 ? pdfExtractedText : resumeContent;
+        (!isReadableText && mimeType.includes("pdf")) ? extractPdfTextWithOcrFallback(bytes) : "";
+    const effectiveResumeContent = looksLikeUsableResumeText(pdfExtractedText) ? pdfExtractedText : resumeContent;
 
     const scoped = await db.getData();
     const userId = scoped.user.id;
@@ -615,24 +620,22 @@ function inferCustomFieldsFromText(text: string) {
 
 function extractPdfTextFallback(buffer: Buffer) {
     const binary = buffer.toString("latin1");
-    const chunks: string[] = [];
+    const chunks: string[] = extractPdfTextFromContent(binary);
 
-    const simpleTextOps = binary.match(/\((?:\\.|[^\\()]){3,}\)\s*Tj/g) || [];
-    for (const op of simpleTextOps) {
-        const raw = op.replace(/\)\s*Tj$/, "").replace(/^\(/, "");
-        chunks.push(raw.replace(/\\([()\\])/g, "$1"));
-    }
-
-    const arrayTextOps = binary.match(/\[(?:[^\]]{4,})\]\s*TJ/g) || [];
-    for (const op of arrayTextOps) {
-        const body = op.replace(/\]\s*TJ$/, "").replace(/^\[/, "");
-        const inner = body.match(/\((?:\\.|[^\\()])+\)/g) || [];
-        for (const item of inner) {
-            chunks.push(item.slice(1, -1).replace(/\\([()\\])/g, "$1"));
+    // Many PDFs store text in compressed streams. Try inflating common stream bodies.
+    const streamRegex = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
+    let match: RegExpExecArray | null = null;
+    while ((match = streamRegex.exec(binary)) !== null) {
+        const streamBody = match[1] || "";
+        const streamBuffer = Buffer.from(streamBody, "latin1");
+        const inflatedVariants = tryInflatePdfStream(streamBuffer);
+        for (const inflated of inflatedVariants) {
+            const asText = inflated.toString("latin1");
+            chunks.push(...extractPdfTextFromContent(asText));
         }
     }
 
-    // Fallback: collect long printable spans often present in resume PDFs.
+    // Fallback: collect long printable runs often present in PDFs.
     const printableRuns = binary.match(/[A-Za-z0-9@._:+\-\/(),\s]{8,}/g) || [];
     for (const run of printableRuns) {
         const cleaned = run.replace(/\s+/g, " ").trim();
@@ -648,6 +651,301 @@ function extractPdfTextFallback(buffer: Buffer) {
         .replace(/\\t/g, " ")
         .replace(/\s+/g, " ")
         .trim();
+}
+
+function tryInflatePdfStream(input: Buffer) {
+    const out: Buffer[] = [];
+    try {
+        out.push(zlib.inflateSync(input));
+    } catch {
+    }
+    try {
+        out.push(zlib.inflateRawSync(input));
+    } catch {
+    }
+    return out;
+}
+
+function decodePdfStringToken(raw: string) {
+    let value = raw;
+    value = value.replace(/\\\r?\n/g, ""); // line continuation
+    value = value.replace(/\\n/g, "\n");
+    value = value.replace(/\\r/g, "\r");
+    value = value.replace(/\\t/g, "\t");
+    value = value.replace(/\\b/g, "\b");
+    value = value.replace(/\\f/g, "\f");
+    value = value.replace(/\\\(/g, "(");
+    value = value.replace(/\\\)/g, ")");
+    value = value.replace(/\\\\/g, "\\");
+    value = value.replace(/\\([0-7]{1,3})/g, (_, oct) => {
+        const code = Number.parseInt(oct, 8);
+        if (!Number.isFinite(code)) return "";
+        return String.fromCharCode(code);
+    });
+    return value;
+}
+
+function extractPdfTextFromContent(content: string) {
+    const chunks: string[] = [];
+
+    const simpleTextOps = content.match(/\((?:\\.|[^\\()]){2,}\)\s*Tj/g) || [];
+    for (const op of simpleTextOps) {
+        const raw = op.replace(/\)\s*Tj$/, "").replace(/^\(/, "");
+        const decoded = decodePdfStringToken(raw).trim();
+        if (decoded.length >= 2) chunks.push(decoded);
+    }
+
+    const arrayTextOps = content.match(/\[(?:[\s\S]{3,}?)\]\s*TJ/g) || [];
+    for (const op of arrayTextOps) {
+        const body = op.replace(/\]\s*TJ$/, "").replace(/^\[/, "");
+        const inner = body.match(/\((?:\\.|[^\\()])+\)/g) || [];
+        for (const item of inner) {
+            const decoded = decodePdfStringToken(item.slice(1, -1)).trim();
+            if (decoded.length >= 2) chunks.push(decoded);
+        }
+    }
+
+    return chunks;
+}
+
+function looksLikeUsableResumeText(text: string) {
+    const cleaned = (text || "").replace(/\s+/g, " ").trim();
+    if (cleaned.length < 250) return false;
+    if (/(\/Type|obj|endobj|xref|endstream)/i.test(cleaned.slice(0, 1200))) return false;
+    const words = cleaned.split(/\s+/);
+    if (words.length < 80) return false;
+    const alphaChars = cleaned.replace(/[^A-Za-z]/g, "").length;
+    const ratio = alphaChars / Math.max(1, cleaned.length);
+    return ratio > 0.45;
+}
+
+function getAffindaBaseUrl() {
+    const region = (process.env.AFFINDA_REGION || "api").trim();
+    return `https://${region}.affinda.com`;
+}
+
+function buildResumeTextFromAffindaData(data: any) {
+    const lines: string[] = [];
+
+    const name =
+        data?.name?.raw ||
+        [data?.name?.first, data?.name?.middle, data?.name?.last].filter(Boolean).join(" ");
+    if (name) lines.push(String(name));
+
+    const contact = [
+        ...(Array.isArray(data?.emails) ? data.emails : []),
+        ...(Array.isArray(data?.phoneNumbers) ? data.phoneNumbers : []),
+        ...(Array.isArray(data?.websites) ? data.websites : []),
+        data?.location?.formatted || data?.location?.rawInput || "",
+    ].filter(Boolean);
+    if (contact.length) lines.push(contact.join(" | "));
+
+    if (data?.summary || data?.objective) {
+        lines.push("SUMMARY");
+        lines.push(String(data.summary || data.objective));
+    }
+
+    const skills = Array.isArray(data?.skills) ? data.skills : [];
+    if (skills.length) {
+        lines.push("SKILLS");
+        lines.push(
+            skills
+                .map((s: any) => String(s?.name || s || "").trim())
+                .filter(Boolean)
+                .join(", ")
+        );
+    }
+
+    const exp = Array.isArray(data?.workExperience) ? data.workExperience : [];
+    if (exp.length) {
+        lines.push("EXPERIENCE");
+        for (const item of exp.slice(0, 12)) {
+            const role = String(item?.jobTitle || item?.title || "").trim();
+            const company = String(item?.organization || item?.company || "").trim();
+            const start = String(item?.startDate || "").trim();
+            const end = String(item?.endDate || item?.isCurrent ? "Present" : "").trim();
+            const header = [role, company].filter(Boolean).join(" at ");
+            if (header) lines.push(header);
+            if (start || end) lines.push([start, end].filter(Boolean).join(" - "));
+            const summary = String(item?.jobDescription || item?.description || "").trim();
+            if (summary) lines.push(summary);
+        }
+    }
+
+    const education = Array.isArray(data?.education) ? data.education : [];
+    if (education.length) {
+        lines.push("EDUCATION");
+        for (const item of education.slice(0, 8)) {
+            const school = String(item?.organization || item?.institution || "").trim();
+            const degree = String(item?.accreditation?.education || item?.degree || "").trim();
+            const major = String(item?.accreditation?.inputStr || item?.major || "").trim();
+            const line = [school, degree || major].filter(Boolean).join(" - ");
+            if (line) lines.push(line);
+        }
+    }
+
+    return lines.join("\n").trim();
+}
+
+async function tryExtractResumeTextWithAffinda(buffer: Buffer, fileName: string, mimeType: string) {
+    const token = (process.env.AFFINDA_API_KEY || "").trim();
+    if (!token) return "";
+
+    try {
+        const form = new FormData();
+        const bytes = Uint8Array.from(buffer);
+        const blob = new Blob([bytes], { type: mimeType || "application/pdf" });
+        form.append("file", blob, fileName || "resume.pdf");
+
+        const uploadRes = await fetch(`${getAffindaBaseUrl()}/v2/resumes`, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${token}`,
+            },
+            body: form,
+        });
+        if (!uploadRes.ok) return "";
+
+        const uploadJson: any = await uploadRes.json().catch(() => ({}));
+        const identifier =
+            uploadJson?.identifier ||
+            uploadJson?.data?.identifier ||
+            uploadJson?.id ||
+            uploadJson?.data?.id;
+        if (!identifier) return "";
+
+        let parsePayload: any = null;
+        for (let attempt = 0; attempt < 10; attempt++) {
+            const statusRes = await fetch(`${getAffindaBaseUrl()}/v2/resumes/${identifier}`, {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                },
+            });
+            if (!statusRes.ok) break;
+            const statusJson: any = await statusRes.json().catch(() => ({}));
+            const data = statusJson?.data || statusJson;
+            const status = String(data?.status || "").toLowerCase();
+            if (status.includes("failed") || status.includes("error")) break;
+            if (!status || status.includes("complete") || status.includes("success") || status === "done" || status === "parsed") {
+                parsePayload = data;
+                break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 900));
+        }
+
+        if (!parsePayload) return "";
+        const directText =
+            String(parsePayload?.rawText || parsePayload?.text || parsePayload?.plainText || "").trim();
+        if (looksLikeUsableResumeText(directText)) return directText;
+
+        const synthesized = buildResumeTextFromAffindaData(parsePayload);
+        return looksLikeUsableResumeText(synthesized) ? synthesized : "";
+    } catch {
+        return "";
+    }
+}
+
+function commandExists(command: string) {
+    try {
+        const checker = process.platform === "win32" ? "where" : "which";
+        const result = spawnSync(checker, [command], { stdio: "ignore" });
+        return result.status === 0;
+    } catch {
+        return false;
+    }
+}
+
+function runTesseractOnImages(imagePaths: string[]) {
+    const chunks: string[] = [];
+    for (const imagePath of imagePaths.slice(0, 3)) {
+        try {
+            const out = execFileSync("tesseract", [imagePath, "stdout", "-l", "eng", "--psm", "6"], {
+                encoding: "utf8",
+                stdio: ["ignore", "pipe", "ignore"],
+            });
+            if (out && out.trim()) chunks.push(out.trim());
+        } catch {
+            // Ignore OCR failures per page.
+        }
+    }
+    return chunks.join("\n\n").trim();
+}
+
+function extractPdfTextViaOcr(buffer: Buffer) {
+    if (!commandExists("tesseract")) return "";
+
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "applypilot-ocr-"));
+    const inputPdf = path.join(tmpRoot, "resume.pdf");
+    const imagePrefix = path.join(tmpRoot, "page");
+
+    try {
+        fs.writeFileSync(inputPdf, buffer);
+
+        let imagePaths: string[] = [];
+
+        // Preferred path: poppler pdftoppm -> PNG pages.
+        if (commandExists("pdftoppm")) {
+            execFileSync("pdftoppm", ["-png", "-f", "1", "-l", "3", inputPdf, imagePrefix], {
+                stdio: ["ignore", "ignore", "ignore"],
+            });
+            imagePaths = fs
+                .readdirSync(tmpRoot)
+                .filter((name) => /^page-\d+\.png$/i.test(name))
+                .map((name) => path.join(tmpRoot, name))
+                .sort();
+        }
+
+        // Fallback path: ImageMagick convert PDF pages to PNG.
+        if (!imagePaths.length && commandExists("magick")) {
+            execFileSync("magick", ["-density", "220", `${inputPdf}[0-2]`, `${imagePrefix}-%d.png`], {
+                stdio: ["ignore", "ignore", "ignore"],
+            });
+            imagePaths = fs
+                .readdirSync(tmpRoot)
+                .filter((name) => /^page-\d+\.png$/i.test(name))
+                .map((name) => path.join(tmpRoot, name))
+                .sort();
+        }
+
+        if (!imagePaths.length) return "";
+
+        const ocrText = runTesseractOnImages(imagePaths);
+        if (!ocrText) return "";
+        return ocrText
+            .replace(/\r/g, "")
+            .replace(/[ \t]+\n/g, "\n")
+            .replace(/\n{3,}/g, "\n\n")
+            .trim();
+    } catch {
+        return "";
+    } finally {
+        try {
+            fs.rmSync(tmpRoot, { recursive: true, force: true });
+        } catch {
+        }
+    }
+}
+
+function extractPdfTextWithOcrFallback(buffer: Buffer) {
+    const nativeExtracted = extractPdfTextFallback(buffer);
+    if (looksLikeUsableResumeText(nativeExtracted)) return nativeExtracted;
+
+    const ocrExtracted = extractPdfTextViaOcr(buffer);
+    if (looksLikeUsableResumeText(ocrExtracted)) return ocrExtracted;
+
+    return nativeExtracted;
+}
+
+async function extractResumeTextForUpload(buffer: Buffer, fileName: string, mimeType: string) {
+    const ext = (fileName || "").toLowerCase();
+    const isPdf = (mimeType || "").toLowerCase().includes("pdf") || ext.endsWith(".pdf");
+    if (!isPdf) return "";
+
+    // Production-first path used by many ATS/job systems: managed parsing API.
+    const managed = await tryExtractResumeTextWithAffinda(buffer, fileName, mimeType);
+    if (looksLikeUsableResumeText(managed)) return managed;
+
+    return extractPdfTextWithOcrFallback(buffer);
 }
 
 function tokenize(text: string) {
@@ -1282,8 +1580,8 @@ export async function refreshProfileFromLatestResume() {
     if (isPlaceholderText && latestResume.originalFileBase64 && (latestResume.originalMimeType || "").toLowerCase().includes("pdf")) {
         try {
             const pdfBytes = Buffer.from(latestResume.originalFileBase64, "base64");
-            const extracted = extractPdfTextFallback(pdfBytes);
-            if (extracted.length > 200) {
+            const extracted = extractPdfTextWithOcrFallback(pdfBytes);
+            if (looksLikeUsableResumeText(extracted)) {
                 normalizedResumeContent = extracted;
             }
         } catch (error) {
@@ -1294,7 +1592,7 @@ export async function refreshProfileFromLatestResume() {
     if (!normalizedResumeContent || normalizedResumeContent.toLowerCase().includes("parsed content would go here") || normalizedResumeContent.toLowerCase().includes("resume file uploaded (")) {
         const backup = sortedResumes.find((r) => {
             const text = (r.content || "").trim().toLowerCase();
-            return text.length > 200 && !text.includes("resume file uploaded (") && !text.includes("parsed content would go here");
+            return looksLikeUsableResumeText(text) && !text.includes("resume file uploaded (") && !text.includes("parsed content would go here");
         });
         if (backup) {
             normalizedResumeContent = (backup.content || "").trim();
@@ -1342,8 +1640,8 @@ function getResumeUsableText(resume: Resume) {
     if (isPlaceholder && resume.originalFileBase64 && (resume.originalMimeType || "").toLowerCase().includes("pdf")) {
         try {
             const pdfBytes = Buffer.from(resume.originalFileBase64, "base64");
-            const extracted = extractPdfTextFallback(pdfBytes);
-            if (extracted.length > 200) text = extracted;
+            const extracted = extractPdfTextWithOcrFallback(pdfBytes);
+            if (looksLikeUsableResumeText(extracted)) text = extracted;
         } catch {
         }
     }
