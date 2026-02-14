@@ -1,13 +1,34 @@
 import { NextRequest, NextResponse } from "next/server";
 
-export async function GET(request: NextRequest) {
-    const clientId = process.env.GOOGLE_CLIENT_ID;
-    if (!clientId) {
-        return NextResponse.redirect(new URL("/settings?gmail=missing_env", request.url));
+function getPublicOrigin(request: NextRequest) {
+    const explicit =
+        process.env.APP_URL ||
+        process.env.NEXT_PUBLIC_APP_URL ||
+        process.env.NEXTAUTH_URL ||
+        process.env.RENDER_EXTERNAL_URL;
+    if (explicit) {
+        const base = explicit.startsWith("http") ? explicit : `https://${explicit}`;
+        return base.replace(/\/+$/, "");
     }
 
-    const origin = `${request.nextUrl.protocol}//${request.nextUrl.host}`;
-    const redirectUri = `${origin}/api/gmail/callback`;
+    const forwardedProto = request.headers.get("x-forwarded-proto");
+    const forwardedHost = request.headers.get("x-forwarded-host");
+    if (forwardedHost) {
+        const proto = forwardedProto || "https";
+        return `${proto}://${forwardedHost}`.replace(/\/+$/, "");
+    }
+
+    return `${request.nextUrl.protocol}//${request.nextUrl.host}`.replace(/\/+$/, "");
+}
+
+export async function GET(request: NextRequest) {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const publicOrigin = getPublicOrigin(request);
+    if (!clientId) {
+        return NextResponse.redirect(`${publicOrigin}/settings?gmail=missing_env`);
+    }
+
+    const redirectUri = `${publicOrigin}/api/gmail/callback`;
     const scope = encodeURIComponent("https://www.googleapis.com/auth/gmail.readonly");
     const state = encodeURIComponent("applypilot_gmail_connect");
 

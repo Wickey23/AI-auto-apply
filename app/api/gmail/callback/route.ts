@@ -1,22 +1,43 @@
 import { db } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 
+function getPublicOrigin(request: NextRequest) {
+    const explicit =
+        process.env.APP_URL ||
+        process.env.NEXT_PUBLIC_APP_URL ||
+        process.env.NEXTAUTH_URL ||
+        process.env.RENDER_EXTERNAL_URL;
+    if (explicit) {
+        const base = explicit.startsWith("http") ? explicit : `https://${explicit}`;
+        return base.replace(/\/+$/, "");
+    }
+
+    const forwardedProto = request.headers.get("x-forwarded-proto");
+    const forwardedHost = request.headers.get("x-forwarded-host");
+    if (forwardedHost) {
+        const proto = forwardedProto || "https";
+        return `${proto}://${forwardedHost}`.replace(/\/+$/, "");
+    }
+
+    return `${request.nextUrl.protocol}//${request.nextUrl.host}`.replace(/\/+$/, "");
+}
+
 export async function GET(request: NextRequest) {
     const code = request.nextUrl.searchParams.get("code");
     const error = request.nextUrl.searchParams.get("error");
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const publicOrigin = getPublicOrigin(request);
 
     if (error) {
-        return NextResponse.redirect(new URL(`/settings?gmail=error&reason=${encodeURIComponent(error)}`, request.url));
+        return NextResponse.redirect(`${publicOrigin}/settings?gmail=error&reason=${encodeURIComponent(error)}`);
     }
 
     if (!code || !clientId || !clientSecret) {
-        return NextResponse.redirect(new URL("/settings?gmail=error&reason=missing_code_or_env", request.url));
+        return NextResponse.redirect(`${publicOrigin}/settings?gmail=error&reason=missing_code_or_env`);
     }
 
-    const origin = `${request.nextUrl.protocol}//${request.nextUrl.host}`;
-    const redirectUri = `${origin}/api/gmail/callback`;
+    const redirectUri = `${publicOrigin}/api/gmail/callback`;
 
     try {
         const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
@@ -40,7 +61,7 @@ export async function GET(request: NextRequest) {
             } catch {
                 if (raw) reason = raw;
             }
-            return NextResponse.redirect(new URL(`/settings?gmail=error&reason=${encodeURIComponent(String(reason).slice(0, 180))}`, request.url));
+            return NextResponse.redirect(`${publicOrigin}/settings?gmail=error&reason=${encodeURIComponent(String(reason).slice(0, 180))}`);
         }
 
         const tokens = await tokenRes.json();
@@ -49,7 +70,7 @@ export async function GET(request: NextRequest) {
         const expiresIn = Number(tokens.expires_in || 3600);
 
         if (!accessToken || !refreshToken) {
-            return NextResponse.redirect(new URL("/settings?gmail=error&reason=missing_access_or_refresh_token", request.url));
+            return NextResponse.redirect(`${publicOrigin}/settings?gmail=error&reason=missing_access_or_refresh_token`);
         }
 
         let gmailEmail = "";
@@ -68,9 +89,9 @@ export async function GET(request: NextRequest) {
             data.settings.gmailEmail = gmailEmail;
         });
 
-        return NextResponse.redirect(new URL("/settings?gmail=connected", request.url));
+        return NextResponse.redirect(`${publicOrigin}/settings?gmail=connected`);
     } catch (error) {
         const reason = encodeURIComponent(((error as Error).message || "callback_exception").slice(0, 180));
-        return NextResponse.redirect(new URL(`/settings?gmail=error&reason=${reason}`, request.url));
+        return NextResponse.redirect(`${publicOrigin}/settings?gmail=error&reason=${reason}`);
     }
 }
